@@ -59,6 +59,9 @@ class CoreFlowClientTest {
 
         assertThat(client.measuringDevices(1, 31, true)).containsExactlyInAnyOrder(101L, 102L);
         assertThat(core.calls().getLast()).contains("relation=measures&includeDescendants=true");
+        CoreFlowClient missingRoute = new CoreFlowClient(new FlowEngineProperties.Core(core.baseUrl() + "/none", Duration.ofSeconds(2),
+                Duration.ofSeconds(5), Duration.ofSeconds(30), Duration.ofMinutes(5)));
+        assertThat(missingRoute.runtime(null)).as("경로가 없으면(404) 변경 없음으로 본다").isEmpty();
         core.failing(true);
         assertThatThrownBy(() -> client.runtime(null)).isInstanceOf(TransientFailures.CoreUnavailableException.class)
                 .satisfies(e -> assertThat(TransientFailures.isTransient(e)).isTrue());

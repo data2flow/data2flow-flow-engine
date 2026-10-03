@@ -30,6 +30,8 @@ import java.util.UUID;
  */
 public class CoreFlowClient implements CoreFlowDirectory {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(CoreFlowClient.class);
+
     public static final String CALLER_HEADER = "X-CALLER-SERVICE";
     public static final String CALLER = "data2flow-flow-engine";
 
@@ -48,6 +50,11 @@ public class CoreFlowClient implements CoreFlowDirectory {
     public Optional<RuntimeSnapshot> runtime(Long sinceVersion) {
         Response r = get("/internal/core/flows/runtime" + (sinceVersion == null ? "" : "?sinceVersion=" + sinceVersion));
         if (r.status == 204) {
+            return Optional.empty();
+        }
+        if (r.status == 404) {
+            // 경로가 아직 없음(core 배포 전·순서 차이). 빈 목록으로 보면 적재한 플로우를 모두 내리고 타이머를 취소하므로 "변경 없음"으로 본다
+            log.warn("core-api에 API-FLW-80이 없습니다(404). 적재한 플로우를 그대로 둡니다");
             return Optional.empty();
         }
         JsonNode body = r.response();
