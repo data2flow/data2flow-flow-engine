@@ -1,0 +1,28 @@
+{
+  "type": "transform.map", "typeVersion": 1, "category": "transform",
+  "name": "필드 매핑", "description": "코드 없이 필드 이름 바꾸기(rename), 고르기(pick), 값 넣기(set), 지우기(delete)", "icon": "edit",
+  "configSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["rules"],
+    "properties": {
+      "rules": {
+        "type": "array", "minItems": 1, "maxItems": 50,
+        "items": {
+          "type": "object", "required": ["op"],
+          "properties": {
+            "op": {"type": "string", "enum": ["rename", "pick", "set", "delete"]},
+            "path": {"type": "string", "description": "점 경로(예: payload.temperature). pick은 paths"},
+            "paths": {"type": "array", "items": {"type": "string"}},
+            "value": {"description": "set: 넣을 값, rename: 새 경로"}
+          }
+        }
+      }
+    }
+  },
+  "inputs": [{"name": "in", "type": "message"}],
+  "outputs": [{"name": "out", "type": "message"}, {"name": "error", "type": "error"}],
+  "statePolicy": {"rules": "KEEP"},
+  "permissions": [],
+  "defaults": {"retry": {"maxAttempts": 0}}
+}

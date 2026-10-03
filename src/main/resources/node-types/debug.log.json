@@ -1,0 +1,17 @@
+{
+  "type": "debug.log", "typeVersion": 1, "category": "debug",
+  "name": "디버그", "description": "지나가는 메시지를 디버그 패널(data2flow.debug)에 보내고 그대로 넘깁니다. 노드당 초당 50건", "icon": "bug",
+  "configSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "level": {"type": "string", "enum": ["DEBUG", "INFO", "WARN", "ERROR"], "default": "INFO"},
+      "fields": {"type": "array", "items": {"type": "string"}, "description": "보낼 필드 경로(비우면 메시지 전체)", "maxItems": 20}
+    }
+  },
+  "inputs": [{"name": "in", "type": "message"}],
+  "outputs": [{"name": "out", "type": "message"}, {"name": "error", "type": "error"}],
+  "statePolicy": {"level": "KEEP", "fields": "KEEP"},
+  "permissions": [],
+  "defaults": {"retry": {"maxAttempts": 0}}
+}

@@ -1,0 +1,19 @@
+{
+  "type": "transform.js", "typeVersion": 1, "category": "transform",
+  "name": "JavaScript 함수", "description": "msg를 받아 가공해 반환합니다. 본문(return …) 또는 function main(msg, ctx)를 씁니다. 출력 포트 1~10개(out1..n), SCR과 같은 샌드박스·제한", "icon": "code",
+  "configSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["code"],
+    "properties": {
+      "code": {"type": "string", "title": "코드", "maxLength": 65536, "x-widget": "code", "default": "return msg;"},
+      "outputs": {"type": "integer", "title": "출력 수", "minimum": 1, "maximum": 10, "default": 1},
+      "scriptRef": {"type": "string", "description": "스크립트 참조 s-{id}@v{n}(M4)", "pattern": "^s-\\d+@v\\d+$"}
+    }
+  },
+  "inputs": [{"name": "in", "type": "message"}],
+  "outputs": [{"name": "out1", "type": "message", "dynamic": true}, {"name": "error", "type": "error"}],
+  "statePolicy": {"code": "KEEP", "outputs": "KEEP", "scriptRef": "KEEP"},
+  "permissions": [],
+  "defaults": {"retry": {"maxAttempts": 0}, "timeoutMs": 50}
+}

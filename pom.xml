@@ -70,6 +70,44 @@
             <artifactId>micrometer-registry-prometheus</artifactId>
             <scope>runtime</scope>
         </dependency>
+        <!-- 실행 상태 저장소: PostgreSQL 18, 스키마 data2flow_flow(ADR-019). 노드 상태·지속 타이머·아웃박스(design/erd/flow.md) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-flyway</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <!-- RabbitMQ(ADR-020): 행동 요청(data2flow.actions)·도메인 이벤트(data2flow.events)·설정 변경(data2flow.config)·디버그(data2flow.debug)는 AMQP,
+             data2flow.telemetry Super Stream은 Stream Java Client(Apache-2.0/MPL-2.0, 버전은 Boot 관리) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.rabbitmq</groupId>
+            <artifactId>stream-client</artifactId>
+        </dependency>
+        <!-- JS 함수 노드 샌드박스: GraalJS 커뮤니티판(UPL). org.graalvm.polyglot:js(Oracle판, GFTC)는 금지(ADR-008). 버전은 data2flow-bom -->
+        <dependency>
+            <groupId>org.graalvm.polyglot</groupId>
+            <artifactId>polyglot</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.graalvm.polyglot</groupId>
+            <artifactId>js-community</artifactId>
+            <type>pom</type>
+        </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -81,6 +119,42 @@
             <artifactId>spring-boot-webmvc-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>net.java21.data2flow</groupId>
+            <artifactId>data2flow-contracts-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.tngtech.archunit</groupId>
+            <artifactId>archunit-junit5</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- *IT: 실제 PostgreSQL 18·RabbitMQ 3.13 Stream(Testcontainers, H2 금지). 실제 s3·s4 인프라에는 붙지 않는다 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-rabbitmq</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.awaitility</groupId>
+            <artifactId>awaitility</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -89,7 +163,30 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
             </plugin>
-            <!-- *IT는 failsafe로 verify 단계에서 실행(design/testing) -->
+            <!-- 라이선스 정책(ADR-008·018): GraalJS Oracle판(GFTC)·enterprise·isolate 런타임 금지 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>ban-non-community-graal</id>
+                        <goals><goal>enforce</goal></goals>
+                        <configuration>
+                            <rules>
+                                <bannedDependencies>
+                                    <excludes>
+                                        <exclude>org.graalvm.polyglot:js</exclude>
+                                        <exclude>org.graalvm.polyglot:js-isolate</exclude>
+                                        <exclude>org.graalvm.truffle:truffle-enterprise</exclude>
+                                        <exclude>org.graalvm.polyglot:*-isolate</exclude>
+                                    </excludes>
+                                </bannedDependencies>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- *IT는 failsafe로 verify 단계에서 실행(design/testing). 지속 타이머 kill -9 시험(TimerFailoverIT)은 테스트 클래스패스로 별도 JVM 두 개를 띄운다 -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
@@ -106,8 +203,14 @@
                     <excludes><exclude>**/*Application.class</exclude></excludes>
                 </configuration>
                 <executions>
-                    <execution><id>prepare</id><goals><goal>prepare-agent</goal></goals></execution>
-                    <execution><id>prepare-it</id><goals><goal>prepare-agent-integration</goal></goals></execution>
+                    <!-- 에이전트는 GraalJS·Truffle(제3자, 보고서 대상 아님)을 계측하지 않는다. 계측하면 해석 실행 경로가 2배쯤 느려져
+                         JS 노드 CPU 50ms 한도 시험이 운영과 다른 조건에서 돈다(data2flow-pipeline과 같은 설정) -->
+                    <execution><id>prepare</id><goals><goal>prepare-agent</goal></goals>
+                        <configuration><excludes><exclude>com.oracle.*</exclude><exclude>org.graalvm.*</exclude></excludes></configuration>
+                    </execution>
+                    <execution><id>prepare-it</id><goals><goal>prepare-agent-integration</goal></goals>
+                        <configuration><excludes><exclude>com.oracle.*</exclude><exclude>org.graalvm.*</exclude></excludes></configuration>
+                    </execution>
                     <execution>
                         <id>merge</id><phase>post-integration-test</phase><goals><goal>merge</goal></goals>
                         <configuration>

@@ -1,0 +1,29 @@
+{
+  "type": "trigger.telemetry", "typeVersion": 1, "category": "trigger",
+  "name": "텔레메트리", "description": "기기·공간·모델 범위의 측정값이 들어오면 시작합니다(FLW-05.01)", "icon": "sensor",
+  "configSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["target"],
+    "properties": {
+      "target": {
+        "type": "object", "title": "대상",
+        "description": "deviceIds, spaceId(+relation measures, includeChildren), modelId 중 하나",
+        "properties": {
+          "deviceIds": {"type": "array", "items": {"type": ["string", "integer"]}, "minItems": 1, "maxItems": 1000},
+          "spaceId": {"type": ["string", "integer"], "x-widget": "space"},
+          "relation": {"type": "string", "enum": ["measures"], "default": "measures"},
+          "includeChildren": {"type": "boolean", "default": false},
+          "modelId": {"type": ["string", "integer"]}
+        }
+      },
+      "metrics": {"type": "array", "title": "측정 항목", "items": {"type": "string", "maxLength": 64}, "maxItems": 100},
+      "includeVirtual": {"type": "boolean", "title": "가상 데이터 포함", "default": true}
+    }
+  },
+  "inputs": [],
+  "outputs": [{"name": "out", "type": "message"}, {"name": "error", "type": "error"}],
+  "statePolicy": {"target": "RESET", "metrics": "RESET", "includeVirtual": "KEEP"},
+  "permissions": [],
+  "defaults": {"retry": {"maxAttempts": 0}}
+}

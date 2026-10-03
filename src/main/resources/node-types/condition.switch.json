@@ -1,0 +1,28 @@
+{
+  "type": "condition.switch", "typeVersion": 1, "category": "condition",
+  "name": "스위치", "description": "값이나 속성으로 여러 갈래로 나눕니다. 처음 맞는 케이스 포트 하나로만 나가고, 맞는 것이 없으면 default", "icon": "split",
+  "configSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["expression", "cases"],
+    "properties": {
+      "expression": {"type": "string", "title": "값 경로(JSONPath)", "description": "예: $.payload.mode", "default": "$.payload"},
+      "cases": {
+        "type": "array", "title": "케이스", "minItems": 1, "maxItems": 20,
+        "items": {
+          "type": "object", "required": ["name", "op"],
+          "properties": {
+            "name": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,32}$"},
+            "op": {"type": "string", "enum": ["==", "!=", ">", ">=", "<", "<=", "in", "exists"]},
+            "value": {}
+          }
+        }
+      }
+    }
+  },
+  "inputs": [{"name": "in", "type": "message"}],
+  "outputs": [{"name": "default", "type": "message"}, {"name": "error", "type": "error", "dynamic": false}],
+  "statePolicy": {"expression": "KEEP", "cases": "KEEP"},
+  "permissions": [],
+  "defaults": {"retry": {"maxAttempts": 0}}
+}

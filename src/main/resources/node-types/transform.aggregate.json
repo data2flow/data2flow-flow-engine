@@ -1,0 +1,20 @@
+{
+  "type": "transform.aggregate", "typeVersion": 1, "category": "transform",
+  "name": "집계·창", "description": "최근 창(측정 시각 기준) 안의 값을 기기·공간·전체 단위로 평균·최소·최대·합·개수로 묶습니다. 입력마다 1건을 내보냅니다", "icon": "sigma",
+  "configSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["window", "fn"],
+    "properties": {
+      "window": {"type": "string", "format": "duration", "title": "창", "default": "PT5M"},
+      "fn": {"type": "string", "enum": ["avg", "min", "max", "sum", "count"], "default": "avg"},
+      "groupBy": {"type": "string", "enum": ["device", "space", "all"], "default": "device"},
+      "metric": {"type": "string", "description": "비우면 payload의 숫자 항목 전부", "maxLength": 64}
+    }
+  },
+  "inputs": [{"name": "in", "type": "message"}],
+  "outputs": [{"name": "out", "type": "message"}, {"name": "error", "type": "error"}],
+  "statePolicy": {"window": "MIGRATE", "fn": "KEEP", "groupBy": "RESET", "metric": "RESET"},
+  "permissions": [],
+  "defaults": {"retry": {"maxAttempts": 0}}
+}

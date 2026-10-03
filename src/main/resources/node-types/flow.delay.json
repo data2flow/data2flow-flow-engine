@@ -1,0 +1,17 @@
+{
+  "type": "flow.delay", "typeVersion": 1, "category": "flow",
+  "name": "지연", "description": "지속 타이머(flow_timers)로 지정 시간 뒤에 메시지를 내보냅니다. 엔진이 재시작돼도 이어집니다", "icon": "timer",
+  "configSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["duration"],
+    "properties": {
+      "duration": {"type": "string", "format": "duration", "title": "지연 시간", "default": "PT30S", "description": "1초~24시간"}
+    }
+  },
+  "inputs": [{"name": "in", "type": "message"}],
+  "outputs": [{"name": "out", "type": "message"}, {"name": "error", "type": "error"}],
+  "statePolicy": {"duration": "KEEP"},
+  "permissions": [],
+  "defaults": {"retry": {"maxAttempts": 0}}
+}

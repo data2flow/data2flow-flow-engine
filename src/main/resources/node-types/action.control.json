@@ -1,0 +1,31 @@
+{
+  "type": "action.control", "typeVersion": 1, "category": "action",
+  "name": "기기 제어", "description": "표준 기능 명령을 제어 창구(action)로 보냅니다(아웃박스 → data2flow.actions). 대상은 기기 또는 공간 관계(controls)", "icon": "power",
+  "configSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["target", "capability", "command"],
+    "properties": {
+      "target": {
+        "type": "object", "title": "대상",
+        "properties": {
+          "deviceIds": {"type": "array", "items": {"type": ["string", "integer"]}, "minItems": 1, "maxItems": 100},
+          "spaceId": {"type": ["string", "integer"], "x-widget": "space"},
+          "relation": {"type": "string", "enum": ["controls"], "default": "controls"},
+          "capability": {"type": "string"},
+          "includeChildren": {"type": "boolean", "default": false}
+        }
+      },
+      "capability": {"type": "string", "title": "기능", "examples": ["Thermostat", "Switch"]},
+      "command": {"type": "string", "title": "명령", "default": "set"},
+      "args": {"type": "object", "title": "인자"},
+      "validitySeconds": {"type": "integer", "minimum": 10, "maximum": 86400, "default": 600},
+      "priority": {"type": "string", "enum": ["AUTO"], "description": "AUTO 고정(BR-FLW-37)"}
+    }
+  },
+  "inputs": [{"name": "in", "type": "message"}],
+  "outputs": [{"name": "ok", "type": "message"}, {"name": "failed", "type": "message"}, {"name": "error", "type": "error"}],
+  "statePolicy": {"target": "KEEP", "capability": "KEEP", "command": "KEEP", "args": "KEEP", "validitySeconds": "KEEP", "priority": "KEEP"},
+  "permissions": ["FLOW_DEPLOY_CONTROL"],
+  "defaults": {"retry": {"maxAttempts": 3, "backoff": {"initialMs": 1000, "multiplier": 2, "maxMs": 30000}}}
+}
