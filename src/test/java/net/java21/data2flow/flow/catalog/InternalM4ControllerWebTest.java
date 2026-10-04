@@ -122,10 +122,10 @@ class InternalM4ControllerWebTest {
     @Test
     @DisplayName("[FLW-03.06] API-FLW-13 POST /internal/flow/replays → 202 {jobId, status:QUEUED}, 조회·취소, 없는 작업은 404")
     void replays() throws Exception {
-        UUID job = UUID.randomUUID();
+        long job = 41;
         given(replays.submit(any())).willReturn(job);
         mvc.perform(post("/internal/flow/replays").contentType(MediaType.APPLICATION_JSON).content("{\"organizationId\":\"1\"}"))
-                .andExpect(status().isAccepted()).andExpect(jsonPath("$.response.jobId").value(job.toString()))
+                .andExpect(status().isAccepted()).andExpect(jsonPath("$.response.jobId").value("41"))
                 .andExpect(jsonPath("$.response.status").value("QUEUED"));
 
         ReplayJobRepository.Job row = new ReplayJobRepository.Job(job, 1, FlowFixtures.FLOW, "SUCCEEDED", Jsons.object(), 2016, 2016L,
@@ -135,7 +135,7 @@ class InternalM4ControllerWebTest {
                 .andExpect(jsonPath("$.response.progress.processed").value(2016))
                 .andExpect(jsonPath("$.response.result.actions.command").value(7));
         mvc.perform(post("/internal/flow/replays/" + job + "/cancel")).andExpect(status().isOk());
-        mvc.perform(get("/internal/flow/replays/" + UUID.randomUUID())).andExpect(status().isNotFound());
+        mvc.perform(get("/internal/flow/replays/999")).andExpect(status().isNotFound());
     }
 
     @Test

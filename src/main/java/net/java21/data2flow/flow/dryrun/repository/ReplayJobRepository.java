@@ -22,16 +22,17 @@ public class ReplayJobRepository {
     }
 
     /** 작업 한 행 */
-    public record Job(UUID id, long organizationId, UUID flowId, String status, JsonNode request, long processed, Long total,
+    public record Job(long id, long organizationId, UUID flowId, String status, JsonNode request, long processed, Long total,
                       JsonNode result, String error) {
     }
 
-    public void insert(UUID id, long organizationId, UUID flowId, JsonNode request, Instant now) {
-        jdbc.sql("""
-                        INSERT INTO flow_replay_jobs (id, organization_id, flow_id, status, request, created_at)
-                        VALUES (:id, :org, :flow, 'QUEUED', CAST(:request AS jsonb), :now)""")
-                .param("id", id).param("org", organizationId).param("flow", flowId).param("request", request.toString())
-                .param("now", Timestamp.from(now)).update();
+    /** 작업을 만든다. 작업 ID */
+    public long insert(long organizationId, UUID flowId, JsonNode request, Instant now) {
+        return jdbc.sql("""
+                        INSERT INTO flow_replay_jobs (organization_id, flow_id, status, request, created_at)
+                        VALUES (:org, :flow, 'QUEUED', CAST(:request AS jsonb), :now) RETURNING id""")
+                .param("org", organizationId).param("flow", flowId).param("request", request.toString())
+                .param("now", Timestamp.from(now)).query(Long.class).single();
     }
 
     /** 실행할 작업 하나를 잡는다(대기 중이거나, 실행 중인데 1분 넘게 소식이 없는 것) */
@@ -53,7 +54,7 @@ public class ReplayJobRepository {
     }
 
     /** 진행을 기록한다. 취소되었으면 false */
-    public boolean progress(long organizationId, UUID id, long processed, Long total, Instant now) {
+    public boolean progress(long organizationId, long id, long processed, Long total, Instant now) {
         return jdbc.sql("""
                         UPDATE flow_replay_jobs SET processed = :processed, total = :total, heartbeat_at = :now
                          WHERE id = :id AND organization_id = :org AND status = 'RUNNING'""")
@@ -61,7 +62,7 @@ public class ReplayJobRepository {
                 .param("org", organizationId).update() == 1;
     }
 
-    public void finish(long organizationId, UUID id, String status, JsonNode result, String error, long processed, Instant now) {
+    public void finish(long organizationId, long id, String status, JsonNode result, String error, long processed, Instant now) {
         jdbc.sql("""
                         UPDATE flow_replay_jobs SET status = :status, result = CAST(:result AS jsonb), error = :error,
                                processed = :processed, finished_at = :now, heartbeat_at = :now
@@ -72,7 +73,7 @@ public class ReplayJobRepository {
     }
 
     /** 대기·실행 중이면 취소한다. 바뀌었으면 true */
-    public boolean cancel(long organizationId, UUID id, Instant now) {
+    public boolean cancel(long organizationId, long id, Instant now) {
         return jdbc.sql("""
                         UPDATE flow_replay_jobs SET status = 'CANCELLED', finished_at = :now
                          WHERE id = :id AND organization_id = :org AND status IN ('QUEUED','RUNNING')""")
@@ -80,8 +81,8 @@ public class ReplayJobRepository {
     }
 
     /** 내부 API는 작업 ID(UUID)로 찾는다 */
-    @OrganizationScopeExempt("내부 API(API-FLW-13 조회)는 작업 ID(UUID)로 찾는다")
-    public Optional<Job> find(UUID id) {
+    @OrganizationScopeExempt("내부 API(API-FLW-13 조회)는 작업 ID로 찾는다(호출자 core가 조직 범위를 확인한 뒤 부름)")
+    public Optional<Job> find(long id) {
         return jdbc.sql("""
                         SELECT id, organization_id, flow_id, status, request::text, processed, total, result::text, error
                           FROM flow_replay_jobs WHERE id = :id""")
@@ -97,7 +98,7 @@ public class ReplayJobRepository {
     private static Job job(java.sql.ResultSet rs) throws java.sql.SQLException {
         String result = rs.getString(8);
         long total = rs.getLong(7);
-        return new Job(rs.getObject(1, UUID.class), rs.getLong(2), rs.getObject(3, UUID.class), rs.getString(4),
+        return new Job(rs.getLong(1), rs.getLong(2), rs.getObject(3, UUID.class), rs.getString(4),
                 Jsons.MAPPER.readTree(rs.getString(5)), rs.getLong(6), rs.wasNull() ? null : total,
                 result == null ? null : Jsons.MAPPER.readTree(result), rs.getString(9));
     }

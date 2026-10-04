@@ -78,7 +78,7 @@ public class ReplayService {
     }
 
     /** 작업을 만든다(검증 실패는 400). 작업 ID */
-    public UUID submit(ReplayRequest request) {
+    public long submit(ReplayRequest request) {
         UUID flowId = TestRunService.parseFlowId(request.flowId());
         long organizationId;
         try {
@@ -96,10 +96,8 @@ public class ReplayService {
                     "재생 기간은 7일 이하입니다")));
         }
         compile(flowId, organizationId, request);   // 정의가 틀리면 지금 400
-        UUID jobId = UUID.randomUUID();
         scope.add(organizationId);
-        jobs.insert(jobId, organizationId, flowId, Jsons.MAPPER.valueToTree(request), clock.instant());
-        return jobId;
+        return jobs.insert(organizationId, flowId, Jsons.MAPPER.valueToTree(request), clock.instant());
     }
 
     private ExecutionPlan compile(UUID flowId, long organizationId, ReplayRequest request) {
@@ -117,11 +115,11 @@ public class ReplayService {
         return r.plan();
     }
 
-    public Optional<ReplayJobRepository.Job> find(UUID jobId) {
+    public Optional<ReplayJobRepository.Job> find(long jobId) {
         return jobs.find(jobId);
     }
 
-    public boolean cancel(UUID jobId) {
+    public boolean cancel(long jobId) {
         return jobs.find(jobId).map(j -> jobs.cancel(j.organizationId(), jobId, clock.instant())).orElse(false);
     }
 
@@ -256,7 +254,7 @@ public class ReplayService {
     /** 응답 모양 {@code {jobId, flowId, status, progress:{processed, total}, result, error}} */
     public static JsonNode view(ReplayJobRepository.Job job) {
         ObjectNode out = Jsons.object();
-        out.put("jobId", job.id().toString());
+        out.put("jobId", Long.toString(job.id()));
         out.put("flowId", job.flowId().toString());
         out.put("status", job.status());
         ObjectNode p = out.putObject("progress").put("processed", job.processed());

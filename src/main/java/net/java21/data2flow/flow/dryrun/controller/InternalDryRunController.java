@@ -18,7 +18,6 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 import tools.jackson.databind.JsonNode;
 
-import java.util.UUID;
 
 /**
  * 드라이런 내부 API(ADR-021, 호출자 core-api, FLW-api §2). 행동은 기록만 하고 운영 노드 상태를 바꾸지 않는다(BR-FLW-11).
@@ -46,19 +45,19 @@ public class InternalDryRunController {
 
     @PostMapping("/internal/flow/replays")
     public ResponseEntity<ApiResponse<JsonNode>> replay(@RequestBody ReplayRequest request) {
-        UUID jobId = replays.submit(request);
+        long jobId = replays.submit(request);
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(ApiResponse.success(
-                Jsons.object().put("jobId", jobId.toString()).put("status", "QUEUED")));
+                Jsons.object().put("jobId", Long.toString(jobId)).put("status", "QUEUED")));
     }
 
     @GetMapping("/internal/flow/replays/{job-id}")
-    public ApiResponse<JsonNode> replayStatus(@PathVariable("job-id") UUID jobId) {
+    public ApiResponse<JsonNode> replayStatus(@PathVariable("job-id") long jobId) {
         return ApiResponse.success(replays.find(jobId).map(ReplayService::view)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.RESOURCE_NOT_FOUND)));
     }
 
     @PostMapping("/internal/flow/replays/{job-id}/cancel")
-    public ApiResponse<JsonNode> cancel(@PathVariable("job-id") UUID jobId) {
+    public ApiResponse<JsonNode> cancel(@PathVariable("job-id") long jobId) {
         replays.cancel(jobId);
         return ApiResponse.success(replays.find(jobId).map(ReplayService::view)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.RESOURCE_NOT_FOUND)));

@@ -44,7 +44,7 @@ COMMENT ON TABLE flow_traces IS '실행 추적(FLW-03.04). 디버그 노드를 �
 
 -- FLW-03.06 과거 재생(API-FLW-13): 드라이런 작업. 인스턴스 하나가 잡아 실행하고(locked_by·heartbeat_at), 멈추면 다른 인스턴스가 넘겨받는다
 CREATE TABLE flow_replay_jobs (
-    id               uuid          NOT NULL,
+    id               bigint GENERATED ALWAYS AS IDENTITY,
     organization_id  bigint        NOT NULL,
     flow_id          uuid          NOT NULL,
     status           varchar(10)   NOT NULL DEFAULT 'QUEUED',

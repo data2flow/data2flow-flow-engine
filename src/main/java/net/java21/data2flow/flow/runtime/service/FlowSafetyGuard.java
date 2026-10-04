@@ -106,11 +106,11 @@ public class FlowSafetyGuard implements ExecutionListener {
 
     private void pause(LoadedFlow flow, FlowStateChanged.Reason reason, long ratePerSec, String why) {
         LoadedFlow current = registry.get(flow.flowId()).orElse(flow);
-        if (!current.running()) {
+        // 파티션 작업자 여럿이 같은 플로우를 동시에 넘겨도 한 번만 멈추고 한 번만 알린다
+        if (!current.running() || autoPaused.putIfAbsent(flow.flowId(), current.version()) != null) {
             return;   // 이미 멈춤
         }
         registry.put(current.withStatus("PAUSED"));
-        autoPaused.put(flow.flowId(), current.version());
         log.warn("플로우 {} v{}를 멈췄습니다({}): {}", flow.flowId(), current.version(), reason, why);
         notifyChange(flow.organizationId(), new FlowStateChanged(flow.flowId().toString(), current.status(), "PAUSED", reason,
                 new FlowStateChanged.Metrics(errorRate(flow.flowId()), ratePerSec), clock.instant()));

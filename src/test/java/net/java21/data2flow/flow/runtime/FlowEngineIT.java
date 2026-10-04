@@ -66,6 +66,11 @@ class FlowEngineIT extends IntegrationTestSupport {
                 .formatted(device, threshold, target, aggregate ? "n-agg00001" : "n-thr00001"));
     }
 
+    private void deployFast(UUID flow, FlowDefinition definition) {
+        TestInfrastructure.CORE.put(flow, FlowFixtures.ORG, 1, "ACTIVE", definition, List.of(), List.of(), 0, 1000, "DROP");
+        await().atMost(Duration.ofSeconds(20)).until(() -> registry.get(flow).map(f -> f.version() == 1).orElse(false));
+    }
+
     private void deploy(UUID flow, int version, FlowDefinition definition) {
         TestInfrastructure.CORE.put(flow, FlowFixtures.ORG, version, "ACTIVE", definition);
         await().atMost(Duration.ofSeconds(20)).until(() -> registry.get(flow).map(f -> f.version() == version).orElse(false));
@@ -136,7 +141,8 @@ class FlowEngineIT extends IntegrationTestSupport {
     @DisplayName("[FLW-05.01][AT-FLW-24.1] TC-FLW-088 트리거→임계값→제어, 200건: 수신 시각부터 아웃박스 기록까지 p95 ≤ 500ms")
     void latency() {
         UUID flow = UUID.randomUUID();
-        deploy(flow, 1, FlowFixtures.definition("""
+        // 200건을 1~2초 안에 넣으므로 초당 실행 한도(FLW-05.04)를 최대(1,000)로 둔다(기본 100이면 안전장치가 멈춘다)
+        deployFast(flow, FlowFixtures.definition("""
                 {"schema":"data2flow.flow-definition/v1","nodes":[
                   {"id":"n-trg00001","type":"trigger.telemetry","config":{"target":{"modelId":"latency"}}},
                   {"id":"n-thr00001","type":"condition.threshold","config":{"metric":"temperature","op":">","value":27}},

@@ -163,9 +163,11 @@ class FlowDryRunTest {
         ReplayRequest request = new ReplayRequest(FlowFixtures.FLOW.toString(), "1", 4, coolingWithAlert(), from,
                 from.plus(Duration.ofDays(7)), null);
 
-        UUID jobId = replays.submit(request);
+        given(jobs.insert(eq(1L), eq(FlowFixtures.FLOW), any(), any())).willReturn(41L);
+        long jobId = replays.submit(request);
+        assertThat(jobId).isEqualTo(41L);
         ArgumentCaptor<JsonNode> stored = ArgumentCaptor.forClass(JsonNode.class);
-        verify(jobs).insert(eq(jobId), eq(1L), eq(FlowFixtures.FLOW), stored.capture(), any());
+        verify(jobs).insert(eq(1L), eq(FlowFixtures.FLOW), stored.capture(), any());
         assertThat(scope.organizations()).contains(1L);
 
         given(jobs.claim(any(), eq("engine-1"), any(), any())).willReturn(Optional.of(new ReplayJobRepository.Job(jobId, 1,
@@ -211,12 +213,12 @@ class FlowDryRunTest {
         ReplayService replays = new ReplayService(jobs, compiler, executor, core, new DeploymentScope(), "engine-1", clock);
         JsonNode request = Jsons.MAPPER.valueToTree(new ReplayRequest(null, "1", 1, coolingWithAlert(), from, from.plusSeconds(3600),
                 null));
-        UUID id = UUID.randomUUID();
+        long id = 7;
         given(jobs.claim(any(), any(), any(), any())).willReturn(Optional.of(new ReplayJobRepository.Job(id, 1, new UUID(0, 0),
                 "RUNNING", request, 0, null, null, null)));
-        given(jobs.progress(anyLong(), any(), anyLong(), any(), any())).willReturn(false);
+        given(jobs.progress(anyLong(), anyLong(), anyLong(), any(), any())).willReturn(false);
         assertThat(replays.runNext(() -> false)).isTrue();
-        verify(jobs, org.mockito.Mockito.never()).finish(anyLong(), any(), eq("SUCCEEDED"), any(), any(), anyLong(), any());
+        verify(jobs, org.mockito.Mockito.never()).finish(anyLong(), anyLong(), eq("SUCCEEDED"), any(), any(), anyLong(), any());
 
         given(core.telemetryHistory(anyLong(), any(), any(), any(), any(), anyInt())).willThrow(new IllegalStateException("core 없음"));
         assertThat(replays.runNext(() -> false)).isTrue();

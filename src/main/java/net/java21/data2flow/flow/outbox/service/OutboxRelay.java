@@ -33,8 +33,8 @@ import java.util.function.BooleanSupplier;
  *
  * <ul>
  *   <li>행동 요청은 {@code data2flow.actions}(direct, 라우팅 키 command·notify·sink), 알람 신호는 {@code data2flow.events}(topic, {@code alarm.signal}).</li>
- *   <li>한 묶음(기본 50행)을 먼저 모두 보내고 확인을 모아서 기다린다(파이프라이닝). 확인을 한 건씩 기다리면 브로커 왕복이 처리량을 막는다
- *       (TC-FLW-134: 초당 200건 부하에서 감지→제어 p95 2초).</li>
+ *   <li>한 묶음(기본 200행)을 채널 하나로 먼저 모두 보내고 확인을 모아서 기다린다(파이프라이닝, 보낸 순서 = 큐 도착 순서). 확인을 한 건씩
+ *       기다리면 브로커 왕복이 처리량을 막는다(TC-FLW-134: 초당 200건 부하에서 감지→제어 p95 2초).</li>
  *   <li>라우팅되지 않은 메시지(mandatory 반환)·거부는 실패로 보고 1초·2배·최대 60초 뒤 다시 보낸다({@code next_attempt_at}).</li>
  *   <li>이 배포 조직의 행만 다룬다(ADR-030).</li>
  * </ul>
@@ -69,16 +69,23 @@ public class OutboxRelay {
         Integer sent = tx.execute(status -> {
             List<OutboxRepository.OutboxRow> rows = outbox.lockUnsent(scope.organizations(), settings.batch(), clock.instant());
             List<Pending> pending = new ArrayList<>(rows.size());
-            for (OutboxRepository.OutboxRow row : rows) {
-                if (stopping.getAsBoolean()) {
-                    break;
+            List<OutboxRepository.OutboxRow> unsent = new ArrayList<>();
+            // 한 묶음은 채널 하나로 보낸다: 채널이 다르면 브로커 도착 순서가 바뀔 수 있다(같은 기기 명령의 순서 유지)
+            rabbit.invoke(ops -> {
+                for (OutboxRepository.OutboxRow row : rows) {
+                    if (stopping.getAsBoolean()) {
+                        break;
+                    }
+                    try {
+                        pending.add(new Pending(row, send(ops, row)));
+                    } catch (RuntimeException e) {
+                        unsent.add(row);
+                        log.warn("아웃박스 {} 보내기 실패: {}", row.id(), e.getMessage());
+                    }
                 }
-                try {
-                    pending.add(new Pending(row, send(row)));
-                } catch (RuntimeException e) {
-                    failed(row, e.getMessage());
-                }
-            }
+                return null;
+            });
+            unsent.forEach(row -> failed(row, "보내지 못했습니다"));
             long deadline = System.nanoTime() + settings.confirmTimeout().toNanos();
             List<Long> sentIds = new ArrayList<>(pending.size());
             for (Pending p : pending) {
@@ -102,7 +109,7 @@ public class OutboxRelay {
         outbox.markFailed(row.organizationId(), row.id(), error, next);
     }
 
-    private CorrelationData send(OutboxRepository.OutboxRow row) {
+    private CorrelationData send(org.springframework.amqp.rabbit.core.RabbitOperations ops, OutboxRepository.OutboxRow row) {
         JsonNode payload = Jsons.MAPPER.readTree(row.payload());
         MessageProperties props = new MessageProperties();
         props.setContentType(MessageProperties.CONTENT_TYPE_JSON);
@@ -124,7 +131,7 @@ public class OutboxRelay {
             props.setHeader("idempotencyKey", row.idempotencyKey());
         }
         CorrelationData correlation = new CorrelationData(row.idempotencyKey() + ":" + row.id());
-        rabbit.send(row.exchange(), row.routingKey(), new Message(row.payload().getBytes(StandardCharsets.UTF_8), props),
+        ops.send(row.exchange(), row.routingKey(), new Message(row.payload().getBytes(StandardCharsets.UTF_8), props),
                 correlation);
         return correlation;
     }
