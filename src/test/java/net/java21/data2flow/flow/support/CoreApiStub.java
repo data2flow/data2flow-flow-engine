@@ -67,6 +67,12 @@ public final class CoreApiStub implements AutoCloseable {
 
     public void put(UUID flowId, long organization, int activeVersion, String status, FlowDefinition definition,
                     List<String> bypass, long overlayRevision) {
+        put(flowId, organization, activeVersion, status, definition, bypass, List.of(), overlayRevision, 100, "DROP");
+    }
+
+    /** 오버레이 디버그 노드·초당 실행 한도·일시 정지 방식까지 정한다 */
+    public void put(UUID flowId, long organization, int activeVersion, String status, FlowDefinition definition,
+                    List<String> bypass, List<String> debug, long overlayRevision, int rateLimitPerSec, String pauseMode) {
         ObjectNode item = Jsons.object();
         item.put("flowId", flowId.toString());
         item.put("organizationId", Long.toString(organization));
@@ -74,13 +80,14 @@ public final class CoreApiStub implements AutoCloseable {
         item.put("kind", "FLOW");
         item.put("status", status);
         item.put("activeVersion", activeVersion);
-        item.put("rateLimitPerSec", 100);
-        item.put("pauseMode", "DROP");
+        item.put("rateLimitPerSec", rateLimitPerSec);
+        item.put("pauseMode", pauseMode);
         item.set("definition", Jsons.MAPPER.valueToTree(definition));
         ObjectNode overlay = item.putObject("overlay");
         ArrayNode b = overlay.putArray("bypass");
         bypass.forEach(b::add);
-        overlay.putArray("debug");
+        ArrayNode d = overlay.putArray("debug");
+        debug.forEach(d::add);
         overlay.put("revision", overlayRevision);
         flows.put(flowId, item);
         version.incrementAndGet();

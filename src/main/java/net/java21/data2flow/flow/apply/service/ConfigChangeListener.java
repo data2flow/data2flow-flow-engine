@@ -3,6 +3,7 @@ package net.java21.data2flow.flow.apply.service;
 import net.java21.data2flow.contracts.message.ConfigChangedMessage;
 import net.java21.data2flow.contracts.message.MessageCodec;
 import net.java21.data2flow.flow.definition.service.FlowSynchronizer;
+import net.java21.data2flow.flow.guard.service.AutomationGuard;
 import net.java21.data2flow.flow.node.service.SpaceDirectory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,7 +20,8 @@ import java.util.UUID;
  *   <tr><th>entityType</th><th>동작</th></tr>
  *   <tr><td>FLOW·OVERLAY (id = flowId)</td><td>API-FLW-81로 다시 읽어 적용(라이브 리로드, 1초 안 반영)</td></tr>
  *   <tr><td>DEVICE·SPACE·GROUP·MODEL</td><td>공간 측정 기기 캐시를 다시 읽게 한다(트리거 대상)</td></tr>
- *   <tr><td>VARIABLE·SUBFLOW·EMERGENCY_STOP</td><td>M4(변수·서브플로우·비상 정지, BR-FLW-19)</td></tr>
+ *   <tr><td>EMERGENCY_STOP</td><td>비상 정지 목록을 다시 읽는다(BR-FLW-19, 1초 안 반영)</td></tr>
+ *   <tr><td>VARIABLE·SUBFLOW</td><td>아직 받지 않음(플로우 변수·서브플로우 미구현)</td></tr>
  * </table>
  * 연결이 다시 맺어지면 놓친 메시지가 있을 수 있으므로 전체를 다시 읽는다({@link #resync}).
  */
@@ -30,10 +32,12 @@ public class ConfigChangeListener implements MessageListener {
     private final MessageCodec codec = MessageCodec.create();
     private final FlowSynchronizer synchronizer;
     private final SpaceDirectory spaces;
+    private final AutomationGuard guard;
 
-    public ConfigChangeListener(FlowSynchronizer synchronizer, SpaceDirectory spaces) {
+    public ConfigChangeListener(FlowSynchronizer synchronizer, SpaceDirectory spaces, AutomationGuard guard) {
         this.synchronizer = synchronizer;
         this.spaces = spaces;
+        this.guard = guard;
     }
 
     @Override
@@ -65,6 +69,11 @@ public class ConfigChangeListener implements MessageListener {
                 }
             }
             case DEVICE, SPACE, GROUP, MODEL -> spaces.invalidateAll();
+            case EMERGENCY_STOP -> {
+                if (guard != null) {
+                    guard.refresh();
+                }
+            }
             default -> {
                 // 다른 서비스용·M4 종류는 무시
             }
@@ -74,6 +83,9 @@ public class ConfigChangeListener implements MessageListener {
     /** 재연결: 전체 다시 읽기 */
     public void resync() {
         spaces.invalidateAll();
+        if (guard != null) {
+            guard.refresh();
+        }
         try {
             synchronizer.syncAll(true);
         } catch (RuntimeException e) {

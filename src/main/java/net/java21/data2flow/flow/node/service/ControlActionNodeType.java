@@ -20,7 +20,10 @@ import net.java21.data2flow.flow.plan.domain.Jsons;
 import net.java21.data2flow.flow.plan.domain.NodeConfigException;
 import net.java21.data2flow.flow.plan.domain.NodeContext;
 import net.java21.data2flow.flow.plan.domain.NodeType;
+import net.java21.data2flow.flow.plan.domain.TimerFire;
+import net.java21.data2flow.flow.plan.domain.TimerKind;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ObjectNode;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -44,12 +47,16 @@ import java.util.Map;
  *       이 값으로 샌드박스 판정(BR-ACT-23)을 한다.</li>
  *   <li>유효 시각 = 처리 시각 + validitySeconds(기본 600초).</li>
  *   <li>표준 기능은 컴파일할 때 기능 스키마로 인자를 검사한다(BR-ACT-01 1단계. 모델 제약·조직 한계는 action이 실행할 때).</li>
- *   <li>결과 포트(ok·failed, EVT-ACT-01 대기)는 M4에서 만든다. M3는 {@code awaitResult=false}로 보내고 포트로 내보내지 않는다.</li>
+ *   <li>결과 포트(ok·failed, M4): ok·failed에 연결선이 있으면 {@code awaitResult=true}로 보내고 결과 대기 타이머(AWAIT_RESULT, 만기 = 유효
+ *       시각 + 60초)를 둔다. EVT-ACT-01 끝 상태가 오면 APPLIED는 ok, 나머지는 failed로 이어서 실행하고, 결과 없이 만기가 되면 failed(TIMEOUT).
+ *       연결선이 없으면 기다리지 않는다({@code awaitResult=false}). 비상 정지·유지보수로 건너뛴 명령은 어느 포트로도 나가지 않는다.</li>
  * </ul>
  */
 public class ControlActionNodeType implements NodeType {
 
     public static final String TYPE = "action.control";
+    /** 결과 대기 여유(유효 시간이 지나도 action이 FAILED(EXPIRED)를 낼 시간) */
+    static final Duration RESULT_GRACE = Duration.ofSeconds(60);
     private final FlowNodeType descriptor = NodeDescriptors.load(TYPE);
     private final CapabilityCatalog catalog;
     private final Duration defaultValidity;
@@ -159,6 +166,7 @@ public class ControlActionNodeType implements NodeType {
             Instant now = ctx.now();
             Clock fixed = Clock.fixed(now, ZoneOffset.UTC);
             Long triggerSpace = sourceSpace(message);
+            boolean await = ctx.wired("ok") || ctx.wired("failed");
             for (int i = 0; i < targets.size(); i++) {
                 Long space = triggerSpace != null ? triggerSpace : targets.get(i).spaceId();
                 CommandSource source = CommandSource.flow(flowId, ctx.flowVersion(), nodeId, message.triggerMessageId(), space);
@@ -166,10 +174,55 @@ public class ControlActionNodeType implements NodeType {
                         ? ActionIdempotencyKeys.flow(flowId, nodeId, message.triggerMessageId())
                         : ActionIdempotencyKeys.flow(flowId, nodeId, message.triggerMessageId(), i);
                 ActionRequest request = ActionRequest.command(organizationId, key, source, now.plus(validity),
-                        new CommandPayload(targets.get(i), capability, command, args, false), fixed);
-                ctx.action(new ActionDraft("COMMAND", MessagingNames.EXCHANGE_ACTIONS, request.routingKey(), key,
+                        new CommandPayload(targets.get(i), capability, command, args, await), fixed);
+                boolean issued = ctx.action(new ActionDraft("COMMAND", MessagingNames.EXCHANGE_ACTIONS, request.routingKey(), key,
                         Jsons.MAPPER.valueToTree(request), capability + "." + command + args));
+                if (!issued || !await) {
+                    continue;
+                }
+                if (ctx.dryRun()) {
+                    // 드라이런은 결과를 기다리지 않고 성공으로 이어서 본다(실제 명령 없음, BR-FLW-11)
+                    ctx.emit("ok", withResult(message, Jsons.object().put("status", "DRY_RUN").put("idempotencyKey", key)));
+                    continue;
+                }
+                ObjectNode c = Jsons.object();
+                c.set("message", message.body());
+                c.put("triggerMessageId", message.triggerMessageId());
+                c.put("awaitKey", key);
+                ctx.scheduleTimer(TimerKind.AWAIT_RESULT, message.targetKey(), now.plus(validity).plus(RESULT_GRACE), c);
             }
+        }
+
+        /**
+         * 결과 대기 타이머: EVT-ACT-01 끝 상태가 이어 붙었으면({@code context.result}) APPLIED는 ok, 그 밖(FAILED·TIMEOUT·REJECTED·BLOCKED·
+         * SKIPPED·SUPERSEDED·CANCELLED)은 failed. 결과 없이 만기가 되면 failed(TIMEOUT). 내보내는 메시지는 원래 메시지에 {@code result}를 더한 것
+         */
+        @Override
+        public void onTimer(TimerFire fire, NodeContext ctx) {
+            if (fire.kind() != TimerKind.AWAIT_RESULT) {
+                return;
+            }
+            JsonNode context = fire.context();
+            JsonNode body = context.get("message");
+            FlowMessage message = new FlowMessage(body instanceof ObjectNode o ? o.deepCopy() : Jsons.object(),
+                    context.path("triggerMessageId").asString("timer:" + fire.timerId()), fire.targetKey());
+            JsonNode result = context.get("result");
+            ObjectNode r = Jsons.object().put("idempotencyKey", context.path("awaitKey").asString(null));
+            String status;
+            if (result == null || result.isNull()) {
+                status = "TIMEOUT";
+                r.put("status", status).put("reason", "NO_RESULT");
+            } else {
+                r.setAll((ObjectNode) result.deepCopy());
+                status = result.path("status").asString("UNKNOWN");
+            }
+            ctx.emit("APPLIED".equals(status) ? "ok" : "failed", withResult(message, r));
+        }
+
+        private static FlowMessage withResult(FlowMessage message, ObjectNode result) {
+            ObjectNode body = message.body().deepCopy();
+            body.set("result", result);
+            return message.withBody(body);
         }
 
         /** 트리거 메시지의 공간(텔레메트리 {@code spaceId}). 없거나 ID가 아니면 null */

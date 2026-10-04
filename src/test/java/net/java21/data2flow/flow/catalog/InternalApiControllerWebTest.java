@@ -59,7 +59,7 @@ class InternalApiControllerWebTest {
         mvc.perform(get("/internal/flow/node-types").header("X-CALLER-SERVICE", "data2flow-core-api"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.header.isSuccessful").value(true))
-                .andExpect(jsonPath("$.totalCount").value(9))
+                .andExpect(jsonPath("$.totalCount").value(16))
                 .andExpect(jsonPath("$.responses[0].type").value("trigger.telemetry"))
                 .andExpect(jsonPath("$.responses[7].permissions[0]").value("FLOW_DEPLOY_CONTROL"));
     }

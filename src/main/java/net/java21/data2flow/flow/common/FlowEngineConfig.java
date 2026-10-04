@@ -9,14 +9,27 @@ import net.java21.data2flow.flow.apply.service.ApplyReporter;
 import net.java21.data2flow.flow.apply.service.ApplyStatusService;
 import net.java21.data2flow.flow.apply.service.CleanupService;
 import net.java21.data2flow.flow.apply.service.ConfigChangeListener;
+import net.java21.data2flow.flow.apply.service.FlowEventListener;
+import net.java21.data2flow.flow.dryrun.repository.ReplayJobRepository;
+import net.java21.data2flow.flow.dryrun.service.ReplayService;
+import net.java21.data2flow.flow.dryrun.service.TestRunService;
+import net.java21.data2flow.flow.rule.service.RuleFlowCompiler;
 import net.java21.data2flow.flow.definition.service.CachedSpaceDirectory;
 import net.java21.data2flow.flow.definition.service.CoreFlowClient;
 import net.java21.data2flow.flow.definition.service.CoreFlowDirectory;
+import net.java21.data2flow.flow.definition.service.CoreScriptDirectory;
 import net.java21.data2flow.flow.definition.service.FlowSynchronizer;
 import net.java21.data2flow.flow.messaging.AmqpDebugSink;
 import net.java21.data2flow.flow.messaging.EventPublisher;
 import net.java21.data2flow.flow.messaging.StreamConnection;
 import net.java21.data2flow.flow.node.service.AggregateTransformNodeType;
+import net.java21.data2flow.flow.node.service.AlarmActionNodeType;
+import net.java21.data2flow.flow.node.service.GroupConditionNodeType;
+import net.java21.data2flow.flow.node.service.NoDataConditionNodeType;
+import net.java21.data2flow.flow.node.service.NotifyActionNodeType;
+import net.java21.data2flow.flow.node.service.RateOfChangeConditionNodeType;
+import net.java21.data2flow.flow.node.service.SinkDatabaseNodeType;
+import net.java21.data2flow.flow.node.service.TimeWindowConditionNodeType;
 import net.java21.data2flow.flow.node.service.ControlActionNodeType;
 import net.java21.data2flow.flow.node.service.DebugLogNodeType;
 import net.java21.data2flow.flow.node.service.DelayFlowNodeType;
@@ -31,7 +44,19 @@ import net.java21.data2flow.flow.outbox.service.OutboxRelay;
 import net.java21.data2flow.flow.plan.service.FlowCompiler;
 import net.java21.data2flow.flow.plan.service.FlowRegistry;
 import net.java21.data2flow.flow.plan.service.NodeTypeRegistry;
+import net.java21.data2flow.flow.guard.service.AutomationGuard;
+import net.java21.data2flow.flow.liveview.repository.TraceRepository;
+import net.java21.data2flow.flow.liveview.service.LiveStatsCollector;
+import net.java21.data2flow.flow.liveview.service.TraceQueryService;
+import net.java21.data2flow.flow.liveview.service.TraceRecorder;
+import net.java21.data2flow.flow.runtime.domain.ExecutionListener;
+import net.java21.data2flow.flow.runtime.service.FlowMetricsService;
+import net.java21.data2flow.flow.messaging.AsyncFlowStateNotifier;
+import net.java21.data2flow.flow.runtime.domain.ActionGuard;
 import net.java21.data2flow.flow.runtime.domain.DebugSink;
+import net.java21.data2flow.flow.runtime.domain.FlowStateNotifier;
+import net.java21.data2flow.flow.runtime.repository.BufferedTriggerRepository;
+import net.java21.data2flow.flow.runtime.service.FlowSafetyGuard;
 import net.java21.data2flow.flow.runtime.repository.MetricRepository;
 import net.java21.data2flow.flow.runtime.repository.NodeStateRepository;
 import net.java21.data2flow.flow.runtime.repository.PartitionProgressRepository;
@@ -137,17 +162,30 @@ public class FlowEngineConfig {
     }
 
     @Bean
-    NodeTypeRegistry nodeTypeRegistry(SpaceDirectory spaces, ScriptSandbox sandbox, FlowEngineProperties properties) {
+    CoreScriptDirectory scriptDirectory(CoreFlowDirectory core, Clock clock) {
+        return new CoreScriptDirectory(core, java.time.Duration.ofSeconds(30), clock);
+    }
+
+    @Bean
+    NodeTypeRegistry nodeTypeRegistry(SpaceDirectory spaces, ScriptSandbox sandbox, CoreScriptDirectory scripts,
+                                      FlowEngineProperties properties) {
         return new NodeTypeRegistry(List.of(
                 new TelemetryTriggerNodeType(spaces),
                 new ThresholdConditionNodeType(),
                 new SwitchConditionNodeType(),
                 new MapTransformNodeType(),
                 new AggregateTransformNodeType(),
-                new JsFunctionNodeType(sandbox),
+                new JsFunctionNodeType(sandbox, scripts),
                 new DelayFlowNodeType(),
                 new ControlActionNodeType(CapabilityCatalog.standard(), properties.execution().defaultValidity()),
-                new DebugLogNodeType()));
+                new DebugLogNodeType(),
+                new SinkDatabaseNodeType(),
+                new NotifyActionNodeType(),
+                new AlarmActionNodeType(),
+                new NoDataConditionNodeType(),
+                new RateOfChangeConditionNodeType(),
+                new TimeWindowConditionNodeType(),
+                new GroupConditionNodeType()));
     }
 
     @Bean
@@ -196,12 +234,92 @@ public class FlowEngineConfig {
         return new AmqpDebugSink(rabbit, properties.debug(), properties.instanceId(), clock);
     }
 
+    /** 비상 정지·유지보수 자동 제어 차단(BR-FLW-19) */
+    @Bean
+    AutomationGuard automationGuard(CoreFlowDirectory core) {
+        return new AutomationGuard(core);
+    }
+
+    /** EVT-FLW-03 발행(엔진 판정). 처리 경로를 막지 않도록 별도 스레드에서 확인을 기다린다 */
+    @Bean(destroyMethod = "close")
+    AsyncFlowStateNotifier flowStateNotifier(EventPublisher events) {
+        return new AsyncFlowStateNotifier(events);
+    }
+
+    @Bean
+    FlowSafetyGuard flowSafetyGuard(FlowRegistry registry, FlowStateNotifier notifier, Clock clock, FlowEngineProperties properties) {
+        return new FlowSafetyGuard(registry, notifier, clock, properties.execution().errorRateThreshold());
+    }
+
     @Bean
     FlowRuntimeService flowRuntimeService(FlowRegistry registry, FlowExecutor executor, JdbcExecutionStore store,
-                                          PartitionProgressRepository progress, TimerRepository timers, TransactionTemplate tx,
-                                          DebugSink debug, DeploymentScope scope, FlowEngineProperties properties, Clock clock,
-                                          MeterRegistry meters) {
-        return new FlowRuntimeService(registry, executor, store, progress, timers, tx, debug, scope, properties, clock, meters);
+                                          PartitionProgressRepository progress, TimerRepository timers,
+                                          BufferedTriggerRepository buffered, TransactionTemplate tx, DebugSink debug,
+                                          DeploymentScope scope, FlowEngineProperties properties, Clock clock, MeterRegistry meters,
+                                          FlowSafetyGuard safety, ActionGuard guard) {
+        return new FlowRuntimeService(registry, executor, store, progress, timers, buffered, tx, debug, scope, properties, clock,
+                meters, safety, guard);
+    }
+
+    /** 커밋된 실행을 받는 곳(안전장치 오류율·라이브 뷰 카운터·추적)을 실행기에 붙인다 */
+    @Bean
+    org.springframework.beans.factory.SmartInitializingSingleton executionListeners(FlowRuntimeService runtime,
+                                                                                   List<ExecutionListener> listeners) {
+        return () -> listeners.forEach(runtime::addListener);
+    }
+
+    // ---- 라이브 뷰·추적·지표(FLW-03·05.05) ----
+
+    @Bean
+    LiveStatsCollector liveStatsCollector(Clock clock, FlowEngineProperties properties) {
+        return new LiveStatsCollector(clock, properties.instanceId());
+    }
+
+    /** node.stats를 1초마다 낸다(EVT-FLW-01) */
+    @Bean
+    PeriodicWorker liveStatsWorker(LiveStatsCollector collector, DebugSink debugSink, FlowEngineProperties properties) {
+        return new PeriodicWorker("flow-live-stats", java.time.Duration.ofSeconds(1), stopping -> {
+            if (debugSink instanceof AmqpDebugSink amqp) {
+                collector.flush(amqp);
+            }
+        }, properties.runtimeEnabled(), SmartLifecycle.DEFAULT_PHASE - 200);
+    }
+
+    @Bean
+    TraceRecorder traceRecorder(TraceRepository traces, Clock clock) {
+        return new TraceRecorder(traces, clock);
+    }
+
+    @Bean
+    TraceQueryService traceQueryService(TraceRepository traces, Clock clock) {
+        return new TraceQueryService(traces, clock);
+    }
+
+    @Bean
+    PeriodicWorker traceWorker(TraceRecorder recorder, FlowEngineProperties properties) {
+        return new PeriodicWorker("flow-traces", java.time.Duration.ofMillis(250), stopping -> {
+            while (recorder.flush() > 0 && !stopping.getAsBoolean()) {
+                // 쌓인 만큼 쓴다
+            }
+        }, properties.runtimeEnabled(), SmartLifecycle.DEFAULT_PHASE - 300) {
+            @Override
+            public void stop() {
+                super.stop();
+                recorder.flush();
+            }
+        };
+    }
+
+    @Bean
+    FlowMetricsService flowMetricsService(MetricRepository metrics, FlowRegistry registry, Clock clock) {
+        return new FlowMetricsService(metrics, registry, clock);
+    }
+
+    /** 안전장치 오류율 판정(1초, BR-FLW-26) */
+    @Bean
+    PeriodicWorker safetyWorker(FlowSafetyGuard safety, FlowEngineProperties properties) {
+        return new PeriodicWorker("flow-safety", java.time.Duration.ofSeconds(1), stopping -> safety.evaluate(),
+                properties.runtimeEnabled(), SmartLifecycle.DEFAULT_PHASE - 200);
     }
 
     // ---- 적용·동기화(live-reload §4) ----
@@ -225,9 +343,9 @@ public class FlowEngineConfig {
     @Bean
     FlowSynchronizer flowSynchronizer(CoreFlowDirectory core, FlowCompiler compiler, FlowRegistry registry, ApplyReporter reporter,
                                       NodeStateRepository states, TimerRepository timers, DeploymentScope scope,
-                                      FlowEngineProperties properties, Clock clock) {
+                                      FlowEngineProperties properties, Clock clock, FlowSafetyGuard safety) {
         return new FlowSynchronizer(core, compiler, registry, reporter, states, timers, scope,
-                properties.retention().deletedNodeState(), clock);
+                properties.retention().deletedNodeState(), clock, safety);
     }
 
     @Bean
@@ -240,11 +358,12 @@ public class FlowEngineConfig {
     // ---- 주기 작업 ----
 
     @Bean
-    PeriodicWorker flowSyncWorker(FlowSynchronizer synchronizer, FlowEngineProperties properties) {
+    PeriodicWorker flowSyncWorker(FlowSynchronizer synchronizer, AutomationGuard guard, FlowEngineProperties properties) {
         boolean[] first = {true};
         return new PeriodicWorker("flow-sync", properties.core().syncInterval(), stopping -> {
             synchronizer.syncAll(first[0]);
             first[0] = false;
+            guard.refresh();   // 비상 정지·유지보수(BR-FLW-19) 원천 다시 읽기(이벤트를 놓쳐도 따라잡음)
         }, properties.runtimeEnabled(), SmartLifecycle.DEFAULT_PHASE - 200);
     }
 
@@ -255,6 +374,10 @@ public class FlowEngineConfig {
             do {
                 fired = runtime.fireDueTimers(properties.timer().batch(), stopping);
             } while (fired >= properties.timer().batch() && !stopping.getAsBoolean());
+            int drained;
+            do {
+                drained = runtime.drainBuffered(properties.timer().batch(), stopping);
+            } while (drained >= properties.timer().batch() && !stopping.getAsBoolean());
         }, properties.runtimeEnabled(), SmartLifecycle.DEFAULT_PHASE - 200);
     }
 
@@ -275,15 +398,49 @@ public class FlowEngineConfig {
     }
 
     @Bean
-    PeriodicWorker cleanupWorker(CleanupService cleanup, FlowEngineProperties properties) {
-        return new PeriodicWorker("flow-cleanup", properties.retention().cleanupInterval(), stopping -> cleanup.cleanup(),
-                properties.runtimeEnabled(), SmartLifecycle.DEFAULT_PHASE - 200);
+    PeriodicWorker cleanupWorker(CleanupService cleanup, TraceRecorder traces, FlowRuntimeService runtime, ReplayService replays,
+                                 FlowEngineProperties properties) {
+        return new PeriodicWorker("flow-cleanup", properties.retention().cleanupInterval(), stopping -> {
+            cleanup.cleanup();
+            traces.cleanup();
+            runtime.expireBuffered();
+            replays.cleanup();
+        }, properties.runtimeEnabled(), SmartLifecycle.DEFAULT_PHASE - 200);
     }
 
     @Bean
     PeriodicWorker heartbeatWorker(CleanupService cleanup, FlowEngineProperties properties) {
         return new PeriodicWorker("flow-heartbeat", properties.retention().heartbeat(), stopping -> cleanup.heartbeat(),
                 properties.runtimeEnabled(), SmartLifecycle.DEFAULT_PHASE - 200);
+    }
+
+    // ---- 드라이런·재생·규칙(FLW-03.05·03.06, RUL-01.01) ----
+
+    @Bean
+    TestRunService testRunService(FlowCompiler compiler, FlowRegistry registry, FlowExecutor executor, ActionGuard guard,
+                                  Clock clock) {
+        return new TestRunService(compiler, registry, executor, guard, clock);
+    }
+
+    @Bean
+    ReplayService replayService(ReplayJobRepository jobs, FlowCompiler compiler, FlowExecutor executor, CoreFlowDirectory core,
+                                DeploymentScope scope, FlowEngineProperties properties, Clock clock) {
+        return new ReplayService(jobs, compiler, executor, core, scope, properties.instanceId(), clock);
+    }
+
+    /** 과거 재생 작업자: 작업 하나씩(1초마다 대기 작업 확인) */
+    @Bean
+    PeriodicWorker replayWorker(ReplayService replays, FlowEngineProperties properties) {
+        return new PeriodicWorker("flow-replay", java.time.Duration.ofSeconds(1), stopping -> {
+            while (!stopping.getAsBoolean() && replays.runNext(stopping)) {
+                // 대기 작업이 없을 때까지
+            }
+        }, properties.runtimeEnabled(), SmartLifecycle.DEFAULT_PHASE - 200);
+    }
+
+    @Bean
+    RuleFlowCompiler ruleFlowCompiler() {
+        return new RuleFlowCompiler();
     }
 
     // ---- RabbitMQ Stream ----
@@ -361,6 +518,52 @@ public class FlowEngineConfig {
         return BindingBuilder.bind(actionCommandsDeadLetterQueue).to(deadLetterExchange).with(QuorumQueueSpec.ACTION_COMMANDS.name());
     }
 
+    /** 알림 요청 큐 {@code action.notifications}(소비자 action)도 생산자가 같은 인자로 선언한다(유실 방지) */
+    @Bean
+    Queue actionNotificationsQueue() {
+        return QueueBuilder.durable(QuorumQueueSpec.ACTION_NOTIFICATIONS.name()).withArguments(QuorumQueueSpec.ACTION_NOTIFICATIONS.arguments())
+                .build();
+    }
+
+    @Bean
+    Binding actionNotificationsBinding(Queue actionNotificationsQueue, DirectExchange actionsExchange) {
+        return BindingBuilder.bind(actionNotificationsQueue).to(actionsExchange).with(QuorumQueueSpec.ACTION_NOTIFICATIONS.routingKey());
+    }
+
+    @Bean
+    Queue actionNotificationsDeadLetterQueue() {
+        return QueueBuilder.durable(QuorumQueueSpec.ACTION_NOTIFICATIONS.deadLetterQueue())
+                .withArguments(QuorumQueueSpec.deadLetterArguments()).build();
+    }
+
+    @Bean
+    Binding actionNotificationsDeadLetterBinding(Queue actionNotificationsDeadLetterQueue, DirectExchange deadLetterExchange) {
+        return BindingBuilder.bind(actionNotificationsDeadLetterQueue).to(deadLetterExchange)
+                .with(QuorumQueueSpec.ACTION_NOTIFICATIONS.name());
+    }
+
+    /** Sink 쓰기 큐 {@code action.sinks}(소비자 action)도 생산자가 같은 인자로 선언한다 */
+    @Bean
+    Queue actionSinksQueue() {
+        return QueueBuilder.durable(QuorumQueueSpec.ACTION_SINKS.name()).withArguments(QuorumQueueSpec.ACTION_SINKS.arguments()).build();
+    }
+
+    @Bean
+    Binding actionSinksBinding(Queue actionSinksQueue, DirectExchange actionsExchange) {
+        return BindingBuilder.bind(actionSinksQueue).to(actionsExchange).with(QuorumQueueSpec.ACTION_SINKS.routingKey());
+    }
+
+    @Bean
+    Queue actionSinksDeadLetterQueue() {
+        return QueueBuilder.durable(QuorumQueueSpec.ACTION_SINKS.deadLetterQueue()).withArguments(QuorumQueueSpec.deadLetterArguments())
+                .build();
+    }
+
+    @Bean
+    Binding actionSinksDeadLetterBinding(Queue actionSinksDeadLetterQueue, DirectExchange deadLetterExchange) {
+        return BindingBuilder.bind(actionSinksDeadLetterQueue).to(deadLetterExchange).with(QuorumQueueSpec.ACTION_SINKS.name());
+    }
+
     @Bean
     TopicExchange eventsExchange() {
         return new TopicExchange(MessagingNames.EXCHANGE_EVENTS, true, false);
@@ -386,9 +589,76 @@ public class FlowEngineConfig {
         return BindingBuilder.bind(flowConfigQueue).to(configExchange);
     }
 
+    /** 엔진 이벤트 큐 {@code flow.events}(Quorum): 제어 결과 EVT-ACT-01을 인스턴스들이 나눠 받는다 */
     @Bean
-    ConfigChangeListener configChangeListener(FlowSynchronizer synchronizer, SpaceDirectory spaces) {
-        return new ConfigChangeListener(synchronizer, spaces);
+    Queue flowEventsQueue() {
+        QuorumQueueSpec spec = QuorumQueueSpec.events("flow");
+        return QueueBuilder.durable(spec.name()).withArguments(spec.arguments()).build();
+    }
+
+    @Bean
+    Binding flowEventsCommandStatusBinding(Queue flowEventsQueue, TopicExchange eventsExchange) {
+        return BindingBuilder.bind(flowEventsQueue).to(eventsExchange).with("command.status.*");
+    }
+
+    @Bean
+    Queue flowEventsDeadLetterQueue() {
+        return QueueBuilder.durable(QuorumQueueSpec.events("flow").deadLetterQueue()).withArguments(QuorumQueueSpec.deadLetterArguments())
+                .build();
+    }
+
+    @Bean
+    Binding flowEventsDeadLetterBinding(Queue flowEventsDeadLetterQueue, DirectExchange deadLetterExchange) {
+        return BindingBuilder.bind(flowEventsDeadLetterQueue).to(deadLetterExchange).with(QuorumQueueSpec.events("flow").name());
+    }
+
+    /** 인스턴스 임시 큐 {@code flow.guard.*}: 비상 정지·유지보수는 모든 인스턴스가 받아야 한다(각자 메모리 상태) */
+    @Bean
+    AnonymousQueue flowGuardQueue() {
+        return new AnonymousQueue(new Base64UrlNamingStrategy("flow.guard."));
+    }
+
+    @Bean
+    Binding flowGuardEmergencyBinding(AnonymousQueue flowGuardQueue, TopicExchange eventsExchange) {
+        return BindingBuilder.bind(flowGuardQueue).to(eventsExchange).with("control.emergency.*");
+    }
+
+    @Bean
+    Binding flowGuardMaintenanceBinding(AnonymousQueue flowGuardQueue, TopicExchange eventsExchange) {
+        return BindingBuilder.bind(flowGuardQueue).to(eventsExchange).with("ops.maintenance.*");
+    }
+
+    @Bean
+    FlowEventListener flowEventListener(FlowRuntimeService runtime, AutomationGuard guard) {
+        return new FlowEventListener(runtime, guard);
+    }
+
+    @Bean
+    SimpleMessageListenerContainer flowEventsContainer(ConnectionFactory connectionFactory, Queue flowEventsQueue,
+                                                       FlowEventListener listener, FlowEngineProperties properties) {
+        SimpleMessageListenerContainer container = new SimpleMessageListenerContainer(connectionFactory);
+        container.setQueues(flowEventsQueue);
+        container.setMessageListener(listener);
+        container.setMissingQueuesFatal(false);
+        container.setPrefetchCount(20);
+        container.setAutoStartup(properties.runtimeEnabled());
+        return container;
+    }
+
+    @Bean
+    SimpleMessageListenerContainer flowGuardContainer(ConnectionFactory connectionFactory, AnonymousQueue flowGuardQueue,
+                                                      FlowEventListener listener, FlowEngineProperties properties) {
+        SimpleMessageListenerContainer container = new SimpleMessageListenerContainer(connectionFactory);
+        container.setQueues(flowGuardQueue);
+        container.setMessageListener(listener);
+        container.setMissingQueuesFatal(false);
+        container.setAutoStartup(properties.runtimeEnabled());
+        return container;
+    }
+
+    @Bean
+    ConfigChangeListener configChangeListener(FlowSynchronizer synchronizer, SpaceDirectory spaces, AutomationGuard guard) {
+        return new ConfigChangeListener(synchronizer, spaces, guard);
     }
 
     @Bean

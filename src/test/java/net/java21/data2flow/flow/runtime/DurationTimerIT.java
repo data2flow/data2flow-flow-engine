@@ -54,6 +54,8 @@ class DurationTimerIT extends IntegrationTestSupport {
     @Autowired
     TimerRepository timers;
     @Autowired
+    net.java21.data2flow.flow.runtime.repository.BufferedTriggerRepository buffered;
+    @Autowired
     TransactionTemplate tx;
     @Autowired
     DeploymentScope scope;
@@ -87,10 +89,10 @@ class DurationTimerIT extends IntegrationTestSupport {
             }
             FlowRegistry second = new FlowRegistry();
             second.put(registry.get(flow).orElseThrow());
-            FlowRuntimeService instanceA = new FlowRuntimeService(registry, executor, store, progress, timers, tx, DebugSink.NONE, scope,
-                    properties, Clock.systemUTC(), new SimpleMeterRegistry());
-            FlowRuntimeService instanceB = new FlowRuntimeService(second, executor, store, progress, timers, tx, DebugSink.NONE, scope,
-                    properties, Clock.systemUTC(), new SimpleMeterRegistry());
+            FlowRuntimeService instanceA = new FlowRuntimeService(registry, executor, store, progress, timers, buffered, tx, DebugSink.NONE,
+                    scope, properties, Clock.systemUTC(), new SimpleMeterRegistry(), null, null);
+            FlowRuntimeService instanceB = new FlowRuntimeService(second, executor, store, progress, timers, buffered, tx, DebugSink.NONE,
+                    scope, properties, Clock.systemUTC(), new SimpleMeterRegistry(), null, null);
 
             AtomicBoolean stop = new AtomicBoolean();
             ExecutorService pool = Executors.newFixedThreadPool(2);

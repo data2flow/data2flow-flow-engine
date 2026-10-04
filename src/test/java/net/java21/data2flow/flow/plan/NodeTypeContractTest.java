@@ -33,16 +33,23 @@ class NodeTypeContractTest {
     private static final CompileContext CONTEXT = new CompileContext(FlowFixtures.FLOW, 1, 1);
 
     /** 종류별 대표 설정과 필수 필드 하나를 뺀 설정 */
-    private static final Map<String, String[]> SAMPLES = Map.of(
-            "trigger.telemetry", new String[]{"{\"target\":{\"spaceId\":\"31\"},\"metrics\":[\"temperature\"]}", "{}", "config.target"},
-            "condition.threshold", new String[]{"{\"metric\":\"temperature\",\"op\":\">\",\"value\":27,\"for\":\"PT5M\",\"clear\":26}", "{\"op\":\">\"}", "config.value"},
-            "condition.switch", new String[]{"{\"expression\":\"$.payload.mode\",\"cases\":[{\"name\":\"cool\",\"op\":\"==\",\"value\":\"cool\"}]}", "{\"cases\":[]}", "config.expression"},
-            "transform.map", new String[]{"{\"rules\":[{\"op\":\"set\",\"path\":\"a\",\"value\":1}]}", "{}", "config.rules"},
-            "transform.aggregate", new String[]{"{\"window\":\"PT5M\",\"fn\":\"avg\",\"groupBy\":\"space\"}", "{\"window\":\"PT5M\"}", "config.fn"},
-            "transform.js", new String[]{"{\"code\":\"return msg;\",\"outputs\":1}", "{}", "config.code"},
-            "flow.delay", new String[]{"{\"duration\":\"PT30S\"}", "{}", "config.duration"},
-            "action.control", new String[]{"{\"target\":{\"spaceId\":31},\"capability\":\"Thermostat\",\"command\":\"set\",\"args\":{\"mode\":\"cool\"}}", "{\"target\":{\"spaceId\":31},\"command\":\"set\"}", "config.capability"},
-            "debug.log", new String[]{"{\"level\":\"INFO\"}", "{\"level\":\"LOUD\"}", "config.level"});
+    private static final Map<String, String[]> SAMPLES = Map.ofEntries(
+            Map.entry("trigger.telemetry", new String[]{"{\"target\":{\"spaceId\":\"31\"},\"metrics\":[\"temperature\"]}", "{}", "config.target"}),
+            Map.entry("condition.threshold", new String[]{"{\"metric\":\"temperature\",\"op\":\">\",\"value\":27,\"for\":\"PT5M\",\"clear\":26}", "{\"op\":\">\"}", "config.value"}),
+            Map.entry("condition.switch", new String[]{"{\"expression\":\"$.payload.mode\",\"cases\":[{\"name\":\"cool\",\"op\":\"==\",\"value\":\"cool\"}]}", "{\"cases\":[]}", "config.expression"}),
+            Map.entry("transform.map", new String[]{"{\"rules\":[{\"op\":\"set\",\"path\":\"a\",\"value\":1}]}", "{}", "config.rules"}),
+            Map.entry("transform.aggregate", new String[]{"{\"window\":\"PT5M\",\"fn\":\"avg\",\"groupBy\":\"space\"}", "{\"window\":\"PT5M\"}", "config.fn"}),
+            Map.entry("transform.js", new String[]{"{\"code\":\"return msg;\",\"outputs\":1}", "{}", "config.code"}),
+            Map.entry("flow.delay", new String[]{"{\"duration\":\"PT30S\"}", "{}", "config.duration"}),
+            Map.entry("action.control", new String[]{"{\"target\":{\"spaceId\":31},\"capability\":\"Thermostat\",\"command\":\"set\",\"args\":{\"mode\":\"cool\"}}", "{\"target\":{\"spaceId\":31},\"command\":\"set\"}", "config.capability"}),
+            Map.entry("debug.log", new String[]{"{\"level\":\"INFO\"}", "{\"level\":\"LOUD\"}", "config.level"}),
+            Map.entry("sink.database", new String[]{"{\"connectionId\":\"4\",\"target\":\"room_temp\",\"mode\":\"upsert\",\"upsertKeys\":[\"device_id\"]}", "{\"target\":\"room_temp\"}", "config.connectionId"}),
+            Map.entry("action.notify", new String[]{"{\"policyId\":\"7\",\"templateKey\":\"flow.notify.default\",\"aggregateWindow\":\"PT1M\"}", "{}", "config.policyId"}),
+            Map.entry("action.alarm", new String[]{"{\"mode\":\"raise\",\"severity\":\"MAJOR\",\"title\":\"고온 {{payload.temperature}}\"}", "{\"mode\":\"raise\",\"title\":\"x\"}", "config.severity"}),
+            Map.entry("condition.noData", new String[]{"{\"window\":\"PT30M\"}", "{}", "config.window"}),
+            Map.entry("condition.rateOfChange", new String[]{"{\"metric\":\"temperature\",\"window\":\"PT10M\",\"delta\":3,\"direction\":\"up\"}", "{\"window\":\"PT10M\",\"delta\":3}", "config.metric"}),
+            Map.entry("condition.timeWindow", new String[]{"{\"days\":[\"MON\",\"TUE\"],\"from\":\"09:00\",\"to\":\"18:00\"}", "{\"from\":\"9시\"}", "config.from"}),
+            Map.entry("condition.group", new String[]{"{\"op\":\"AND\",\"items\":[{\"metric\":\"co2\",\"op\":\">\",\"value\":1000}]}", "{\"op\":\"AND\"}", "config.items"}));
 
     static Stream<NodeType> nodeTypes() {
         return REGISTRY.all().stream();
@@ -88,12 +95,16 @@ class NodeTypeContractTest {
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("nodeTypes")
-    @DisplayName("[FLW-05.06] TC-FLW-030 행동 노드는 FLOW_DEPLOY_CONTROL 권한과 재시도 기본 3회(BR-FLW-21)")
+    @DisplayName("[FLW-05.06][FLW-08.01] TC-FLW-030 행동·Sink 노드는 재시도 기본 3회(BR-FLW-21), 기기 제어 노드는 FLOW_DEPLOY_CONTROL 권한")
     void actionNodes(NodeType type) {
         FlowNodeType d = type.descriptor();
-        if ("action".equals(d.category())) {
-            assertThat(d.permissions()).contains("FLOW_DEPLOY_CONTROL");
+        if ("action".equals(d.category()) || "sink".equals(d.category())) {
             assertThat(d.defaults().path("retry").path("maxAttempts").asInt()).isEqualTo(3);
+            if (type.type().equals("action.control") || type.type().equals("action.scene")) {
+                assertThat(d.permissions()).contains("FLOW_DEPLOY_CONTROL");
+            } else {
+                assertThat(d.permissions()).doesNotContain("FLOW_DEPLOY_CONTROL");
+            }
         } else {
             assertThat(d.defaults().path("retry").path("maxAttempts").asInt()).isZero();
         }

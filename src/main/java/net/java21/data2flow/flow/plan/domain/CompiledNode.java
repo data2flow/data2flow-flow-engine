@@ -22,4 +22,9 @@ public interface CompiledNode {
 
     /** 이 노드의 출력 포트(공통 error 제외). 첫 번째가 기본 포트(와이어에 port가 없을 때) */
     List<String> outputs();
+
+    /** 실행 계획이 드레인 뒤 닫힐 때(live-reload §4 ⑥). 붙잡은 자원(JS 컨텍스트 등)을 놓는다 */
+    default void close() {
+        // 자원 없음
+    }
 }

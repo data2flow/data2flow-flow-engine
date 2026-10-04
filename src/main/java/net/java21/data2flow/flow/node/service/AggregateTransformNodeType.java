@@ -61,6 +61,31 @@ public class AggregateTransformNodeType implements NodeType {
         return new Compiled(window, fn, groupBy, Jsons.text(config, "metric"));
     }
 
+    /**
+     * MIGRATE(창 길이 변경, FLW-06.03·TC-FLW-141): 표본을 새 창 길이로 자른다(가장 최근 표본 기준). 창이 길어지면 모든 표본을 그대로 둔다.
+     */
+    @Override
+    public JsonNode migrateState(JsonNode oldConfig, JsonNode newConfig, JsonNode state) {
+        String windowText = Jsons.text(newConfig, "window");
+        if (state == null || windowText == null || !state.path("samples").isArray()) {
+            return state;
+        }
+        Duration window = Durations.parse(windowText, "config.window");
+        long latest = 0;
+        for (JsonNode s : state.get("samples").values()) {
+            latest = Math.max(latest, s.path("t").asLong(0));
+        }
+        long cutoff = latest - window.toMillis();
+        ObjectNode next = Jsons.object();
+        ArrayNode array = next.putArray("samples");
+        for (JsonNode s : state.get("samples").values()) {
+            if (s.path("t").asLong(0) >= cutoff) {
+                array.add(s);
+            }
+        }
+        return next;
+    }
+
     record Compiled(Duration window, String fn, String groupBy, String metric) implements CompiledNode {
 
         @Override

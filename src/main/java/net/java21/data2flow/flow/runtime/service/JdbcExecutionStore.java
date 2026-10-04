@@ -7,6 +7,7 @@ import net.java21.data2flow.flow.runtime.domain.ExecutionStore;
 import net.java21.data2flow.flow.runtime.domain.NodeMetrics;
 import net.java21.data2flow.flow.runtime.repository.NodeStateRepository;
 import net.java21.data2flow.flow.timer.repository.TimerRepository;
+import net.java21.data2flow.flow.runtime.domain.StoredState;
 import tools.jackson.databind.JsonNode;
 
 import java.time.Clock;
@@ -35,13 +36,19 @@ public class JdbcExecutionStore implements ExecutionStore {
     }
 
     @Override
-    public JsonNode lockState(UUID flowId, long organizationId, String nodeId, String targetKey) {
+    public StoredState lockState(UUID flowId, long organizationId, String nodeId, String targetKey) {
         return states.lock(organizationId, flowId, nodeId, targetKey);
     }
 
     @Override
-    public void writeState(UUID flowId, long organizationId, String nodeId, String targetKey, JsonNode state) {
-        states.update(organizationId, flowId, nodeId, targetKey, state, clock.instant());
+    public void writeState(UUID flowId, long organizationId, String nodeId, String targetKey, JsonNode state,
+                           JsonNode stateConfig) {
+        states.update(organizationId, flowId, nodeId, targetKey, state, stateConfig, clock.instant());
+    }
+
+    @Override
+    public long countWaitingTimers(UUID flowId, long organizationId) {
+        return timers.countWaiting(organizationId, flowId);
     }
 
     @Override

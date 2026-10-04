@@ -113,6 +113,56 @@ public class TimerRepository {
                 .param("flow", flowId).param("org", organizationId).query(Long.class).single();
     }
 
+    /**
+     * 실행 키의 진행 중인 실행 수(FLW-05.07): 대기·재시도·결과 대기 타이머가 남은 서로 다른 실행(원인 메시지) 수.
+     */
+    public int countRunsInProgress(long organizationId, UUID flowId, String runKey) {
+        return jdbc.sql("""
+                        SELECT count(DISTINCT context->'@run'->>'id') FROM flow_timers
+                         WHERE flow_id = :flow AND organization_id = :org AND status = 'WAITING'
+                           AND (context->'@run'->>'key') = :key AND kind IN ('DELAY','WAIT_UNTIL','APPROVAL','RETRY','AWAIT_RESULT')""")
+                .param("flow", flowId).param("org", organizationId).param("key", runKey).query(Integer.class).single();
+    }
+
+    /** restart 모드(BR-FLW-18): 실행 키의 진행 중인 실행 타이머를 모두 취소한다. 취소한 수 */
+    public int cancelRuns(long organizationId, UUID flowId, String runKey) {
+        return jdbc.sql("""
+                        UPDATE flow_timers SET status = 'CANCELLED'
+                         WHERE flow_id = :flow AND organization_id = :org AND status = 'WAITING'
+                           AND (context->'@run'->>'key') = :key AND kind IN ('DELAY','WAIT_UNTIL','APPROVAL','RETRY','AWAIT_RESULT')""")
+                .param("flow", flowId).param("org", organizationId).param("key", runKey).update();
+    }
+
+    /** 제어 결과를 기다리는 타이머(EVT-ACT-01의 멱등 키로 찾음). 잠그지 않음 */
+    public List<Candidate> findAwaiting(long organizationId, String awaitKey) {
+        return jdbc.sql("""
+                        SELECT id, organization_id, flow_id, node_id, target_key FROM flow_timers
+                         WHERE organization_id = :org AND status = 'WAITING' AND kind = 'AWAIT_RESULT' AND (context->>'awaitKey') = :key""")
+                .param("org", organizationId).param("key", awaitKey)
+                .query((rs, n) -> new Candidate(rs.getLong(1), rs.getLong(2), rs.getObject(3, UUID.class), rs.getString(4),
+                        rs.getString(5))).list();
+    }
+
+    /** RESET된 노드의 대기 타이머 중 이전 버전이 만든 것을 취소한다(FLW-06.03 정리). 취소한 수 */
+    public int cancelNodeBefore(long organizationId, UUID flowId, String nodeId, int version) {
+        return jdbc.sql("""
+                        UPDATE flow_timers SET status = 'CANCELLED'
+                         WHERE flow_id = :flow AND organization_id = :org AND node_id = :node AND status = 'WAITING'
+                           AND flow_version < :version AND kind IN ('RECHECK','WAIT_UNTIL')""")
+                .param("flow", flowId).param("org", organizationId).param("node", nodeId).param("version", version).update();
+    }
+
+    /** 한 행(시험·조회) */
+    public Optional<TimerRow> find(long organizationId, long timerId) {
+        return jdbc.sql("""
+                        SELECT id, organization_id, flow_id, flow_version, node_id, target_key, kind, due_at, context::text, attempts
+                          FROM flow_timers WHERE id = :id AND organization_id = :org""")
+                .param("id", timerId).param("org", organizationId)
+                .query((rs, n) -> new TimerRow(rs.getLong(1), rs.getLong(2), rs.getObject(3, UUID.class), rs.getInt(4),
+                        rs.getString(5), rs.getString(6), TimerKind.valueOf(rs.getString(7)), rs.getTimestamp(8).toInstant(),
+                        Jsons.MAPPER.readTree(rs.getString(9)), rs.getInt(10))).optional();
+    }
+
     /** 끝난 타이머 정리(7일, ERD README §14) */
     @OrganizationScopeExempt("끝난 행 정리는 조직과 무관한 시스템 보관 정책")
     public int deleteFinished(Instant before) {

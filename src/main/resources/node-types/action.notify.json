@@ -1,0 +1,24 @@
+{
+  "type": "action.notify", "typeVersion": 1, "category": "action",
+  "name": "알림", "description": "알림 요청을 action의 알림 공통 계층으로 보냅니다(정책 또는 채널, 템플릿, 묶기). 메시지는 그대로 다음 노드로 넘깁니다", "icon": "bell",
+  "configSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "policyId": {"type": ["string", "integer"], "title": "알림 정책", "x-widget": "notification-policy"},
+      "channels": {"type": "array", "title": "채널(정책 대신)", "items": {"type": "string", "examples": ["TELEGRAM", "WEB"]}},
+      "recipients": {"type": "array", "title": "수신자", "items": {"type": "object", "required": ["type", "channel"],
+        "properties": {"type": {"type": "string", "enum": ["USER", "ROLE", "ON_CALL", "CHANNEL_DEFAULT"]}, "id": {"type": "string"}, "channel": {"type": "string"}}}},
+      "templateKey": {"type": "string", "title": "템플릿", "default": "flow.notify.default"},
+      "aggregateWindow": {"type": "string", "format": "duration", "title": "묶기 창", "description": "0 또는 1~10분"},
+      "severity": {"type": "string", "enum": ["CRITICAL", "MAJOR", "MINOR", "WARNING", "INFO"]},
+      "variables": {"type": "object", "title": "템플릿 변수", "description": "이름 → 메시지 경로(payload.temperature)", "additionalProperties": {"type": "string"}},
+      "link": {"type": "string", "title": "바로가기 링크"}
+    }
+  },
+  "inputs": [{"name": "in", "type": "message"}],
+  "outputs": [{"name": "out", "type": "message"}, {"name": "error", "type": "error"}],
+  "statePolicy": {"policyId": "KEEP", "channels": "KEEP", "recipients": "KEEP", "templateKey": "KEEP", "aggregateWindow": "KEEP", "severity": "KEEP", "variables": "KEEP", "link": "KEEP"},
+  "permissions": [],
+  "defaults": {"retry": {"maxAttempts": 3, "backoff": {"initialMs": 1000, "multiplier": 2, "maxMs": 30000}}}
+}

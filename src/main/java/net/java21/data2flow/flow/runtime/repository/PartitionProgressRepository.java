@@ -41,6 +41,35 @@ public class PartitionProgressRepository {
                 }).optional().orElse(false);
     }
 
+    /** 워터마크를 잠그고 읽는다(묶음 처리: 이미 처리한 메시지를 걸러 냄). 행이 없으면 -1 */
+    public long lockWatermark(long organizationId, UUID flowId, int partition) {
+        return jdbc.sql("""
+                        SELECT watermark_offset FROM flow_partition_progress
+                         WHERE flow_id = :flow AND stream_partition = :partition AND organization_id = :org FOR UPDATE""")
+                .param("flow", flowId).param("partition", partition).param("org", organizationId)
+                .query(Long.class).optional().orElse(-1L);
+    }
+
+    /**
+     * 처리 진행을 이 오프셋으로 올린다(메시지 처리 트랜잭션의 마지막 문장, BR-FLW-29). 이미 이 오프셋 이상을 처리했으면 0을 돌려주고, 호출하는
+     * 쪽은 트랜잭션을 되돌린다(다시 읽은 메시지의 노드 상태·행동을 반영하지 않음). 행이 없으면 만든다. 문장 하나라서 메시지마다 DB 왕복이
+     * 잠금·확인·갱신 셋보다 적다(TC-FLW-134 초당 200건). 같은 오프셋을 두 소비자가 동시에 처리하면(장애 전환 직후) 나중 쪽은 이 문장에서
+     * 먼저 쪽의 커밋을 기다린 뒤 0을 받는다.
+     *
+     * @return 올렸으면 1, 이미 처리한 오프셋이면 0
+     */
+    public int advance(long organizationId, UUID flowId, int partition, long offset, Instant now) {
+        return jdbc.sql("""
+                        INSERT INTO flow_partition_progress (flow_id, stream_partition, organization_id, watermark_offset, updated_at)
+                        VALUES (:flow, :partition, :org, :offset, :now)
+                        ON CONFLICT (flow_id, stream_partition) DO UPDATE
+                           SET watermark_offset = EXCLUDED.watermark_offset, updated_at = EXCLUDED.updated_at
+                         WHERE flow_partition_progress.watermark_offset < EXCLUDED.watermark_offset
+                           AND flow_partition_progress.organization_id = EXCLUDED.organization_id""")
+                .param("flow", flowId).param("partition", partition).param("org", organizationId).param("offset", offset)
+                .param("now", Timestamp.from(now)).update();
+    }
+
     public void markProcessed(long organizationId, UUID flowId, int partition, long offset, Instant now) {
         jdbc.sql("""
                         UPDATE flow_partition_progress

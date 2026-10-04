@@ -8,6 +8,8 @@ import net.java21.data2flow.flow.plan.domain.FlowValidationError;
 import net.java21.data2flow.flow.plan.domain.LoadedFlow;
 import net.java21.data2flow.flow.plan.service.FlowCompiler;
 import net.java21.data2flow.flow.plan.service.FlowRegistry;
+import net.java21.data2flow.flow.plan.service.StatePolicyResolver;
+import net.java21.data2flow.flow.runtime.service.FlowSafetyGuard;
 import net.java21.data2flow.flow.runtime.repository.NodeStateRepository;
 import net.java21.data2flow.flow.timer.repository.TimerRepository;
 import org.slf4j.Logger;
@@ -16,6 +18,7 @@ import org.slf4j.LoggerFactory;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.HashSet;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -34,7 +37,9 @@ import java.util.stream.Collectors;
  *   <li>⑦ 적용 보고(EVT-FLW-02)</li>
  * </ol>
  * 상태가 DISABLED·DELETED(목록에서 빠짐·404)이면 내리고 대기 타이머를 취소한다(BR-FLW-18). PAUSED는 계획을 두되 트리거·타이머를 멈춘다.
- * 설정만 바뀐 노드의 KEEP/RESET/MIGRATE(FLW-06.03)는 M4에서 만든다(M3는 같은 노드 ID의 상태를 그대로 이어받는다).
+ * 설정이 바뀐 노드의 상태는 노드 종류의 정책(KEEP/RESET/MIGRATE, FLW-06.03)을 따른다: 상태 행에 쓴 노드의 지문이 있어 읽을 때 적용하고,
+ * RESET 노드는 적용 직후 이전 설정의 상태 행과 판정 타이머를 정리한다. 엔진이 멈춘 플로우(폭주·순환)는 core가 PAUSED를 알려 줄 때까지 멈춘
+ * 채로 둔다({@link FlowSafetyGuard#holdsPause}).
  */
 public class FlowSynchronizer {
 
@@ -49,12 +54,13 @@ public class FlowSynchronizer {
     private final DeploymentScope scope;
     private final Duration retainDeleted;
     private final Clock clock;
+    private final FlowSafetyGuard safety;
     private volatile Long lastVersion;
     private volatile boolean synced;
 
     public FlowSynchronizer(CoreFlowDirectory core, FlowCompiler compiler, FlowRegistry registry, ApplyReporter reporter,
                             NodeStateRepository states, TimerRepository timers, DeploymentScope scope, Duration retainDeleted,
-                            Clock clock) {
+                            Clock clock, FlowSafetyGuard safety) {
         this.core = core;
         this.compiler = compiler;
         this.registry = registry;
@@ -64,6 +70,7 @@ public class FlowSynchronizer {
         this.scope = scope;
         this.retainDeleted = retainDeleted;
         this.clock = clock;
+        this.safety = safety;
     }
 
     /** 처음 전체 동기화가 끝났는지(readiness) */
@@ -113,12 +120,23 @@ public class FlowSynchronizer {
             unload(flow.flowId(), "상태 " + flow.status());
             return;
         }
+        String status = safety != null && safety.holdsPause(flow.flowId(), flow.status(), flow.activeVersion())
+                ? "PAUSED" : flow.status();
         Optional<LoadedFlow> current = registry.get(flow.flowId());
         if (current.isPresent() && current.get().version() == flow.activeVersion()) {
             LoadedFlow c = current.get();
             boolean overlayChanged = c.overlay().revision() != flow.overlay().revision();
-            if (overlayChanged || !c.status().equals(flow.status())) {
-                registry.put(new LoadedFlow(c.flowId(), c.organizationId(), flow.name(), flow.status(), c.plan(), flow.overlay()));
+            LoadedFlow next = new LoadedFlow(c.flowId(), c.organizationId(), flow.name(), status, c.plan(), flow.overlay(),
+                    flow.kind(), flow.rateLimitPerSec(), flow.pauseMode());
+            if (!Objects.equals(c.name(), next.name()) || !c.status().equals(next.status()) || !c.overlay().equals(next.overlay())
+                    || !c.kind().equals(next.kind()) || c.rateLimitPerSec() != next.rateLimitPerSec()
+                    || !c.pauseMode().equals(next.pauseMode())) {
+                registry.put(next);
+                if (!c.status().equals(status)) {
+                    log.info("플로우 {} v{} 상태 {} → {}", flow.flowId(), c.version(), c.status(), status);
+                }
+            }
+            if (overlayChanged || !c.status().equals(status)) {
                 reporter.report(flow.organizationId(), flow.flowId(), c.version(), flow.overlay().revision(), 0, null);
             }
             return;
@@ -135,16 +153,37 @@ public class FlowSynchronizer {
                     current.map(c -> c.overlay().revision()).orElse(0L), compileMs, error);
             return;
         }
-        registry.put(new LoadedFlow(flow.flowId(), flow.organizationId(), flow.name(), flow.status(), result.plan(),
-                flow.overlay()));
+        // ④ 원자적 전환: 이 뒤로 시작하는 메시지는 새 계획, 이전 계획을 잡은 메시지는 그 계획으로 끝까지(BR-FLW-06)
+        Optional<LoadedFlow> previous = registry.put(new LoadedFlow(flow.flowId(), flow.organizationId(), flow.name(), status,
+                result.plan(), flow.overlay(), flow.kind(), flow.rateLimitPerSec(), flow.pauseMode()));
+        // ⑤ 상태 정리(BR-FLW-07): 삭제 노드는 24시간 보관, RESET 노드는 이전 설정의 상태·판정 타이머를 정리(읽을 때도 지문으로 걸러짐)
+        StatePolicyResolver.Summary summary = StatePolicyResolver.diff(previous.map(LoadedFlow::plan).orElse(null), result.plan());
         try {
             states.retainRemoved(flow.organizationId(), flow.flowId(), result.plan().nodeIds(), clock.instant().plus(retainDeleted));
+            for (String nodeId : summary.reset()) {
+                int deleted = states.deleteMismatched(flow.organizationId(), flow.flowId(), nodeId,
+                        result.plan().node(nodeId).stateConfig());
+                int cancelled = timers.cancelNodeBefore(flow.organizationId(), flow.flowId(), nodeId, flow.activeVersion());
+                log.info("플로우 {} v{} 노드 {} 상태 RESET: 상태 {}행 삭제, 판정 타이머 {}개 취소", flow.flowId(), flow.activeVersion(),
+                        nodeId, deleted, cancelled);
+            }
         } catch (RuntimeException e) {
-            log.warn("플로우 {} 삭제 노드 상태 보관 표시 실패(다음 적용에 다시): {}", flow.flowId(), e.getMessage());
+            log.warn("플로우 {} 상태 정리 실패(읽을 때 지문으로 걸러지므로 동작에는 영향 없음): {}", flow.flowId(), e.getMessage());
         }
-        log.info("플로우 {} v{} 적용({}ms, 노드 {}개, 상태 {})", flow.flowId(), flow.activeVersion(), compileMs,
-                result.plan().nodes().size(), flow.status());
+        log.info("플로우 {} v{} 적용({}ms, 노드 {}개, 상태 {}, 추가 {} 삭제 {} 변경 {}, 이전 계획 드레인 대기 {})", flow.flowId(),
+                flow.activeVersion(), compileMs, result.plan().nodes().size(), status, summary.added().size(),
+                summary.removed().size(), summary.changed(), registry.sweep());
         reporter.report(flow.organizationId(), flow.flowId(), flow.activeVersion(), flow.overlay().revision(), compileMs, null);
+    }
+
+    /** 적재된 플로우 대비 변경 요약(API-FLW-84 검증 응답). 적재되지 않았으면 모든 노드가 추가 */
+    public StatePolicyResolver.Summary changeSummary(UUID flowId, long organizationId,
+                                                     net.java21.data2flow.contracts.flow.FlowDefinition definition) {
+        FlowCompiler.Result result = compiler.compile(flowId, organizationId, 0, definition);
+        if (!result.ok()) {
+            return null;
+        }
+        return StatePolicyResolver.diff(registry.get(flowId).map(LoadedFlow::plan).orElse(null), result.plan());
     }
 
     private void unload(UUID flowId, String reason) {

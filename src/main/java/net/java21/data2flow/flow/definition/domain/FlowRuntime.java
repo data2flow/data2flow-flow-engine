@@ -17,9 +17,16 @@ import java.util.UUID;
  * @param activeVersion   실행할 버전
  * @param definition      그 버전의 정의
  * @param overlay         바이패스·디버그(버전 없이 즉시 반영)
+ * @param rateLimitPerSec 초당 실행 한도(FLW-05.04, 버전에 포함). 0이면 기본 100
+ * @param pauseMode       일시 정지 중 트리거 DROP·BUFFER(FLW-08.04)
  */
 public record FlowRuntime(UUID flowId, long organizationId, String name, String kind, String status, int activeVersion,
-                          FlowDefinition definition, Overlay overlay) {
+                          FlowDefinition definition, Overlay overlay, int rateLimitPerSec, String pauseMode) {
+
+    public FlowRuntime(UUID flowId, long organizationId, String name, String kind, String status, int activeVersion,
+                       FlowDefinition definition, Overlay overlay) {
+        this(flowId, organizationId, name, kind, status, activeVersion, definition, overlay, 0, "DROP");
+    }
 
     private static final Set<String> RUNNING = Set.of("ACTIVE", "DEGRADED");
     private static final Set<String> LOADED = Set.of("ACTIVE", "DEGRADED", "PAUSED");

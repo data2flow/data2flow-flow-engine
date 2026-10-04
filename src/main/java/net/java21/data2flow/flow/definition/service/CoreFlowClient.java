@@ -1,6 +1,7 @@
 package net.java21.data2flow.flow.definition.service;
 
 import net.java21.data2flow.contracts.flow.FlowDefinition;
+import net.java21.data2flow.contracts.message.CanonicalTelemetry;
 import net.java21.data2flow.flow.common.FlowEngineProperties;
 import net.java21.data2flow.flow.common.TransientFailures.CoreUnavailableException;
 import net.java21.data2flow.flow.definition.domain.FlowRuntime;
@@ -14,6 +15,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -101,6 +103,88 @@ public class CoreFlowClient implements CoreFlowDirectory {
         return Set.copyOf(ids);
     }
 
+    @Override
+    public Set<Long> spaceDevices(long organizationId, long spaceId, boolean includeDescendants) {
+        Response r = get("/internal/core/spaces/" + spaceId + "/devices?includeDescendants=" + includeDescendants);
+        if (r.status == 404) {
+            return Set.of();
+        }
+        Set<Long> ids = new HashSet<>();
+        for (JsonNode d : list(r).values()) {
+            Double id = Jsons.number(d, "deviceId");
+            if (id != null) {
+                ids.add(id.longValue());
+            }
+        }
+        return Set.copyOf(ids);
+    }
+
+    @Override
+    public List<JsonNode> activeEmergencyStops() {
+        Response r = get("/internal/core/emergency-stops?active=true");
+        return r.status == 404 ? List.of() : List.copyOf(list(r).values());
+    }
+
+    @Override
+    public List<JsonNode> activeMaintenance() {
+        Response r = get("/internal/core/maintenance-windows?status=ACTIVE");
+        return r.status == 404 ? List.of() : List.copyOf(list(r).values());
+    }
+
+    @Override
+    public List<JsonNode> scriptBundle(long organizationId) {
+        Response r = get("/internal/core/scripts/runtime-bundle?organizationId=" + organizationId);
+        if (r.status == 404 || r.status == 204) {
+            return List.of();
+        }
+        return List.copyOf(r.response().path("scripts").values());
+    }
+
+    @Override
+    public List<String> deviceTags(long organizationId, long deviceId) {
+        Response r = get("/internal/core/devices/" + deviceId + "/runtime");
+        if (r.status == 404) {
+            return List.of();
+        }
+        List<String> tags = new ArrayList<>();
+        r.response().path("tags").values().forEach(t -> tags.add(t.asString()));
+        return List.copyOf(tags);
+    }
+
+    @Override
+    public TelemetryPage telemetryHistory(long organizationId, List<Long> deviceIds, Instant from, Instant to, String cursor,
+                                          int size) {
+        StringBuilder q = new StringBuilder("/internal/core/telemetry/history?organizationId=").append(organizationId)
+                .append("&from=").append(from).append("&to=").append(to).append("&size=").append(size);
+        if (deviceIds != null && !deviceIds.isEmpty()) {
+            q.append("&deviceIds=").append(deviceIds.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(",")));
+        }
+        if (cursor != null) {
+            q.append("&cursor=").append(java.net.URLEncoder.encode(cursor, java.nio.charset.StandardCharsets.UTF_8));
+        }
+        Response r = get(q.toString());
+        if (r.status == 404) {
+            throw new IllegalStateException("core-api에 과거 텔레메트리 조회(/internal/core/telemetry/history)가 없습니다");
+        }
+        List<CanonicalTelemetry> items = new ArrayList<>();
+        for (JsonNode item : list(r).values()) {
+            items.add(Jsons.MAPPER.treeToValue(item, CanonicalTelemetry.class));
+        }
+        JsonNode next = r.json.has("nextCursor") ? r.json.get("nextCursor") : r.response().path("nextCursor");
+        Double total = Jsons.number(r.json, "totalCount");
+        return new TelemetryPage(List.copyOf(items), next == null || next.isNull() || next.isMissingNode() ? null : next.asString(),
+                total == null ? null : total.longValue());
+    }
+
+    /** 목록 응답(responses 또는 response 배열) */
+    private static JsonNode list(Response r) {
+        JsonNode list = r.json.has("responses") ? r.json.get("responses") : r.json.path("response");
+        if (list.isObject() && list.has("devices")) {
+            list = list.get("devices");
+        }
+        return list.isArray() ? list : Jsons.MAPPER.createArrayNode();
+    }
+
     static FlowRuntime parseFlow(JsonNode item) {
         UUID flowId = UUID.fromString(item.path("flowId").asString());
         Double org = Jsons.number(item, "organizationId");
@@ -116,7 +200,9 @@ public class CoreFlowClient implements CoreFlowDirectory {
         return new FlowRuntime(flowId, org == null ? 0 : org.longValue(), Jsons.text(item, "name"),
                 Optional.ofNullable(Jsons.text(item, "kind")).orElse("FLOW"),
                 Optional.ofNullable(Jsons.text(item, "status")).orElse("ACTIVE"),
-                version == null ? 0 : version.intValue(), definition, overlay);
+                version == null ? 0 : version.intValue(), definition, overlay,
+                Optional.ofNullable(Jsons.number(item, "rateLimitPerSec")).map(Double::intValue).orElse(0),
+                Optional.ofNullable(Jsons.text(item, "pauseMode")).orElse("DROP"));
     }
 
     private Response get(String path) {

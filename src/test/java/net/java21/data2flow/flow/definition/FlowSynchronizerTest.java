@@ -52,7 +52,7 @@ class FlowSynchronizerTest {
             Duration.ofSeconds(5), Duration.ofSeconds(30), Duration.ofMinutes(5)));
     private final SpaceDirectory spaces = new CachedSpaceDirectory(client, Duration.ofMinutes(5), clock);
     private final FlowSynchronizer sync = new FlowSynchronizer(client, new FlowCompiler(FlowTestHarness.registry(spaces)), registry,
-            reporter, states, timers, scope, Duration.ofHours(24), clock);
+            reporter, states, timers, scope, Duration.ofHours(24), clock, null);
     private final UUID flow = UUID.randomUUID();
 
     @AfterEach

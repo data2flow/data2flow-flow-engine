@@ -1,22 +1,103 @@
 {
-  "type": "condition.threshold", "typeVersion": 1, "category": "condition",
-  "name": "임계값", "description": "값을 기준과 비교합니다. 지속 시간(for)과 해제 기준(clear, 히스테리시스)을 주면 상태가 바뀔 때만 내보냅니다", "icon": "gauge",
+  "type": "condition.threshold",
+  "typeVersion": 1,
+  "category": "condition",
+  "name": "임계값",
+  "description": "값을 기준과 비교합니다. 지속 시간(for)·해제 기준(clear, 히스테리시스)·연속 횟수(repeat)를 주면 상태가 바뀔 때만 내보냅니다",
+  "icon": "gauge",
   "configSchema": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
-    "required": ["op"],
+    "required": [
+      "op"
+    ],
     "properties": {
-      "metric": {"type": "string", "title": "측정 항목", "description": "payload의 키. 비우면 payload가 숫자일 때 그 값", "maxLength": 64},
-      "op": {"type": "string", "title": "비교", "enum": [">", ">=", "<", "<=", "==", "!=", "outside", "inside"], "default": ">"},
-      "value": {"type": "number", "title": "기준값"},
-      "range": {"type": "array", "title": "범위[min,max](outside·inside)", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
-      "for": {"type": "string", "format": "duration", "title": "지속 시간", "description": "ISO-8601(PT5M) 또는 5m. 1초~24시간"},
-      "clear": {"type": "number", "title": "해제 기준(히스테리시스)"}
+      "metric": {
+        "type": "string",
+        "title": "측정 항목",
+        "description": "payload의 키. 비우면 payload가 숫자일 때 그 값",
+        "maxLength": 64
+      },
+      "op": {
+        "type": "string",
+        "title": "비교",
+        "enum": [
+          ">",
+          ">=",
+          "<",
+          "<=",
+          "==",
+          "!=",
+          "outside",
+          "inside"
+        ],
+        "default": ">"
+      },
+      "value": {
+        "type": "number",
+        "title": "기준값"
+      },
+      "range": {
+        "type": "array",
+        "title": "범위[min,max](outside·inside)",
+        "items": {
+          "type": "number"
+        },
+        "minItems": 2,
+        "maxItems": 2
+      },
+      "for": {
+        "type": "string",
+        "format": "duration",
+        "title": "지속 시간",
+        "description": "ISO-8601(PT5M) 또는 5m. 1초~24시간"
+      },
+      "clear": {
+        "type": "number",
+        "title": "해제 기준(히스테리시스)"
+      },
+      "repeat": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 100,
+        "title": "연속 횟수",
+        "description": "조건이 연속으로 n번 맞아야 발생(BR-RUL-05). 지속 시간과 함께 쓰면 둘 다"
+      }
     }
   },
-  "inputs": [{"name": "in", "type": "message"}],
-  "outputs": [{"name": "true", "type": "message"}, {"name": "false", "type": "message"}, {"name": "error", "type": "error"}],
-  "statePolicy": {"metric": "RESET", "op": "RESET", "value": "KEEP", "range": "KEEP", "for": "KEEP", "clear": "KEEP"},
+  "inputs": [
+    {
+      "name": "in",
+      "type": "message"
+    }
+  ],
+  "outputs": [
+    {
+      "name": "true",
+      "type": "message"
+    },
+    {
+      "name": "false",
+      "type": "message"
+    },
+    {
+      "name": "error",
+      "type": "error"
+    }
+  ],
+  "statePolicy": {
+    "metric": "RESET",
+    "op": "RESET",
+    "value": "KEEP",
+    "range": "KEEP",
+    "for": "KEEP",
+    "clear": "KEEP",
+    "repeat": "KEEP"
+  },
   "permissions": [],
-  "defaults": {"retry": {"maxAttempts": 0}}
+  "defaults": {
+    "retry": {
+      "maxAttempts": 0
+    }
+  }
 }

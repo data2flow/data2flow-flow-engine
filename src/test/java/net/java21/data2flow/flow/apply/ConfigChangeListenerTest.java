@@ -25,7 +25,7 @@ class ConfigChangeListenerTest {
 
     private final FlowSynchronizer sync = mock(FlowSynchronizer.class);
     private final SpaceDirectory spaces = mock(SpaceDirectory.class);
-    private final ConfigChangeListener listener = new ConfigChangeListener(sync, spaces);
+    private final ConfigChangeListener listener = new ConfigChangeListener(sync, spaces, null);
     private final MessageCodec codec = MessageCodec.create();
 
     private Message message(ConfigChangedMessage.EntityType type, String id) {

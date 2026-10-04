@@ -5,11 +5,13 @@ import net.java21.data2flow.contracts.flow.FlowNode;
 import net.java21.data2flow.contracts.flow.FlowNodeType;
 import net.java21.data2flow.flow.plan.domain.CompileContext;
 import net.java21.data2flow.flow.plan.domain.CompiledNode;
+import net.java21.data2flow.flow.plan.domain.ExecutionMode;
 import net.java21.data2flow.flow.plan.domain.ExecutionPlan;
 import net.java21.data2flow.flow.plan.domain.FlowValidationError;
 import net.java21.data2flow.flow.plan.domain.NodeConfigException;
 import net.java21.data2flow.flow.plan.domain.NodeType;
 import net.java21.data2flow.flow.plan.domain.PlanNode;
+import net.java21.data2flow.flow.plan.domain.RetryPolicy;
 import net.java21.data2flow.flow.plan.domain.TriggerNode;
 
 import java.util.ArrayDeque;
@@ -63,9 +65,16 @@ public class FlowCompiler {
             return new Result(null, errors);
         }
         CompileContext context = new CompileContext(flowId, organizationId, version);
+        ExecutionMode mode = ExecutionMode.DEFAULT;
+        try {
+            mode = ExecutionMode.of(definition.mode());
+        } catch (NodeConfigException e) {
+            errors.add(new FlowValidationError(e.path(), e.code(), e.getMessage()));
+        }
         Map<String, FlowNode> enabled = new LinkedHashMap<>();
         Map<String, NodeType> types = new HashMap<>();
         Map<String, CompiledNode> compiled = new HashMap<>();
+        Map<String, RetryPolicy> retries = new HashMap<>();
         for (FlowNode node : definition.nodes()) {
             if (Boolean.TRUE.equals(node.disabled())) {
                 continue;
@@ -78,6 +87,11 @@ public class FlowCompiler {
                 continue;
             }
             types.put(node.id(), type.get());
+            try {
+                retries.put(node.id(), RetryPolicy.of(node.retry(), type.get().descriptor().defaults()));
+            } catch (NodeConfigException e) {
+                errors.add(new FlowValidationError(FlowValidationError.node(node.id()) + "." + e.path(), e.code(), e.getMessage()));
+            }
             try {
                 compiled.put(node.id(), type.get().compile(node, context));
             } catch (NodeConfigException e) {
@@ -159,7 +173,9 @@ public class FlowCompiler {
             }
             Map<String, List<String>> w = new HashMap<>();
             wires.getOrDefault(node.id(), Map.of()).forEach((p, t) -> w.put(p, List.copyOf(t)));
-            PlanNode planNode = new PlanNode(node, types.get(node.id()), c, order.get(node.id()), Map.copyOf(w));
+            NodeType type = types.get(node.id());
+            PlanNode planNode = new PlanNode(node, type, c, order.get(node.id()), Map.copyOf(w), type.stateConfig(node),
+                    retries.getOrDefault(node.id(), RetryPolicy.NONE));
             nodes.put(node.id(), planNode);
             if (c instanceof TriggerNode) {
                 triggers.add(planNode);
@@ -171,7 +187,7 @@ public class FlowCompiler {
         if (!errors.isEmpty()) {
             return new Result(null, List.copyOf(errors));
         }
-        return new Result(new ExecutionPlan(flowId, organizationId, version, nodes, triggers), List.of());
+        return new Result(new ExecutionPlan(flowId, organizationId, version, nodes, triggers, mode), List.of());
     }
 
     private static String portType(FlowNodeType descriptor, String port) {

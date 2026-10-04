@@ -20,6 +20,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.SmartLifecycle;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -44,6 +45,8 @@ public class TelemetryStreamConsumer implements SmartLifecycle {
 
     private static final Logger log = LoggerFactory.getLogger(TelemetryStreamConsumer.class);
     static final int MAX_QUEUED = 256;
+    /** 한 번에 꺼내 처리하는 최대 메시지 수(밀렸을 때만 모임) */
+    static final int MAX_BATCH = 50;
 
     private final StreamConnection connection;
     private final FlowRuntimeService runtime;
@@ -135,22 +138,25 @@ public class TelemetryStreamConsumer implements SmartLifecycle {
         worker(partition).submit(context, message);
     }
 
-    private void process(MessageHandler.Context context, Message message, int partition) {
-        if (stopping) {
+    /** 묶음(같은 파티션, 오프셋 순서)을 처리하고 모두 커밋되면 마지막 오프셋을 저장한다 */
+    private void process(List<PartitionWorker.Entry> batch, int partition) {
+        if (stopping || batch.isEmpty()) {
             return;
         }
         inFlight.incrementAndGet();
         try {
-            CanonicalTelemetry telemetry;
-            try {
-                telemetry = codec.read(message.getBodyAsBinary(), CanonicalTelemetry.class);
-            } catch (MessageFormatException e) {
-                log.warn("읽을 수 없는 텔레메트리를 건너뜁니다({} 오프셋 {}): {}", context.stream(), context.offset(), e.getMessage());
-                context.storeOffset();
-                return;
+            List<FlowRuntimeService.TelemetryItem> items = new java.util.ArrayList<>(batch.size());
+            for (PartitionWorker.Entry e : batch) {
+                try {
+                    items.add(new FlowRuntimeService.TelemetryItem(
+                            codec.read(e.message().getBodyAsBinary(), CanonicalTelemetry.class), e.context().offset()));
+                } catch (MessageFormatException ex) {
+                    log.warn("읽을 수 없는 텔레메트리를 건너뜁니다({} 오프셋 {}): {}", e.context().stream(), e.context().offset(),
+                            ex.getMessage());
+                }
             }
-            if (runtime.processTelemetry(telemetry, partition, context.offset(), () -> stopping || !running)) {
-                context.storeOffset();
+            if (items.isEmpty() || runtime.processBatch(partition, items, () -> stopping || !running)) {
+                batch.getLast().context().storeOffset();
             }
         } finally {
             inFlight.decrementAndGet();
@@ -195,16 +201,24 @@ public class TelemetryStreamConsumer implements SmartLifecycle {
         return SmartLifecycle.DEFAULT_PHASE - 100;
     }
 
-    /** 파티션 하나의 순차 작업 스레드 */
+    /**
+     * 파티션 하나의 순차 작업 스레드(가상 스레드). 전달 스레드는 대기열에 넣기만 하고(가득 차면 기다림 = 배압), 작업 스레드는 밀린 메시지를
+     * 최대 {@value #MAX_BATCH}건까지 한 번에 꺼내 처리한다(밀림이 없으면 한 건씩이라 지연이 늘지 않음). 파티션을 다른 인스턴스가 넘겨받으면
+     * (세대가 바뀌면) 아직 처리하지 않은 메시지는 버린다(오프셋을 저장하지 않으므로 넘겨받은 쪽이 처리).
+     */
     private final class PartitionWorker {
+        record Entry(int generation, MessageHandler.Context context, Message message) {
+        }
+
         private final int partition;
-        private final java.util.concurrent.ExecutorService executor;
-        private final java.util.concurrent.Semaphore slots = new java.util.concurrent.Semaphore(MAX_QUEUED);
+        private final java.util.concurrent.LinkedBlockingQueue<Entry> queue = new java.util.concurrent.LinkedBlockingQueue<>(MAX_QUEUED);
         private final AtomicInteger generation = new AtomicInteger();
+        private final Thread thread;
+        private volatile boolean closed;
 
         PartitionWorker(int partition) {
             this.partition = partition;
-            this.executor = Executors.newSingleThreadExecutor(Thread.ofVirtual().name("flow-partition-" + partition).factory());
+            this.thread = Thread.ofVirtual().name("flow-partition-" + partition).start(this::loop);
         }
 
         void newGeneration() {
@@ -212,38 +226,46 @@ public class TelemetryStreamConsumer implements SmartLifecycle {
         }
 
         void submit(MessageHandler.Context context, Message message) {
-            int gen = generation.get();
             try {
-                slots.acquire();
+                queue.put(new Entry(generation.get(), context, message));
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                return;
             }
-            try {
-                executor.execute(() -> {
-                    try {
-                        if (gen == generation.get()) {
-                            process(context, message, partition);
-                        }
-                    } finally {
-                        slots.release();
-                    }
-                });
-            } catch (java.util.concurrent.RejectedExecutionException e) {
-                slots.release();
+        }
+
+        private void loop() {
+            while (!closed) {
+                Entry first;
+                try {
+                    first = queue.poll(100, TimeUnit.MILLISECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                if (first == null) {
+                    continue;
+                }
+                List<Entry> batch = new java.util.ArrayList<>(MAX_BATCH);
+                batch.add(first);
+                queue.drainTo(batch, MAX_BATCH - 1);
+                int current = generation.get();
+                batch.removeIf(e -> e.generation() != current);
+                try {
+                    process(batch, partition);
+                } catch (RuntimeException e) {
+                    log.warn("파티션 {} 묶음 처리 실패(오프셋을 저장하지 않음): {}", partition, e.toString());
+                }
             }
         }
 
         void close() {
-            executor.shutdown();
+            closed = true;
             try {
-                if (!executor.awaitTermination(20, TimeUnit.SECONDS)) {
-                    executor.shutdownNow();
-                }
+                thread.join(java.time.Duration.ofSeconds(20));
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                executor.shutdownNow();
             }
+            queue.clear();
         }
     }
 

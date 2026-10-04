@@ -1,0 +1,18 @@
+{
+  "type": "condition.noData", "typeVersion": 1, "category": "condition",
+  "name": "무수신", "description": "대상(기기)의 메시지가 기준 시간 동안 오지 않으면 timeout으로, 다시 오면 restored로 한 번씩 내보냅니다", "icon": "signal-off",
+  "configSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["window"],
+    "properties": {
+      "metric": {"type": "string", "description": "이 항목이 든 메시지만 수신으로 셈. 비우면 모든 메시지", "maxLength": 64},
+      "window": {"type": "string", "format": "duration", "title": "무수신 기준", "default": "PT30M"}
+    }
+  },
+  "inputs": [{"name": "in", "type": "message"}],
+  "outputs": [{"name": "timeout", "type": "message"}, {"name": "restored", "type": "message"}, {"name": "error", "type": "error"}],
+  "statePolicy": {"metric": "RESET", "window": "KEEP"},
+  "permissions": [],
+  "defaults": {"retry": {"maxAttempts": 0}}
+}

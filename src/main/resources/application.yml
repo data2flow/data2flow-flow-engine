@@ -9,6 +9,11 @@ spring:
       enabled: true
   lifecycle:
     timeout-per-shutdown-phase: 30s
+  messages:
+    # 오류 문구(ADR-037: ko 원문, en·ja·zh). 키는 error.<코드>
+    basename: messages
+    encoding: UTF-8
+    fallback-to-system-locale: false
   # 실행 상태 저장소: s3 공용 PostgreSQL DB data2flow, 스키마 data2flow_flow(ADR-019). 값은 환경변수(.env / k8s Secret)
   # ApplicationName은 인스턴스 이름(파드 이름)을 넣어 잠금 보유자를 pg_stat_activity에서 찾을 수 있게 한다
   datasource:
@@ -91,7 +96,8 @@ data2flow:
       max-attempts: 5
     outbox:
       poll-interval: 200ms
-      batch: 50
+      # 한 묶음을 먼저 다 보내고 확인을 모아 기다린다(파이프라이닝). 초당 200건 부하에서 감지→제어 p95 2초(TC-FLW-134)
+      batch: 200
       confirm-timeout: 10s
     execution:
       retry-initial: 200ms
@@ -100,6 +106,8 @@ data2flow:
       max-fanout: 100
       max-state-bytes: 262144
       default-validity: 600s
+      # DEGRADED 판정 오류율 기준(BR-FLW-26: 최근 5분 100건 이상에서)
+      error-rate-threshold: 0.1
     debug:
       samples-per-second: 5
       debug-samples-per-second: 50

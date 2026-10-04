@@ -44,17 +44,30 @@ public class OutboxRepository {
 
     /** 보내지 않은 행을 잠근다(이 배포의 조직만, ADR-030) */
     @OrganizationScopeExempt("배포 조직 목록(organizationIds)으로 좁힌다(ADR-030)")
-    public List<OutboxRow> lockUnsent(Collection<Long> organizationIds, int limit) {
+    public List<OutboxRow> lockUnsent(Collection<Long> organizationIds, int limit, Instant now) {
         if (organizationIds.isEmpty()) {
             return List.of();
         }
         return jdbc.sql("""
                         SELECT id, organization_id, idempotency_key, kind, exchange, routing_key, payload::text, attempts
                           FROM flow_outboxes WHERE sent_at IS NULL AND organization_id = ANY(:orgs)
+                           AND (next_attempt_at IS NULL OR next_attempt_at <= :now)
                          ORDER BY created_at, id LIMIT :limit FOR UPDATE SKIP LOCKED""")
-                .param("orgs", organizationIds.toArray(Long[]::new)).param("limit", limit)
+                .param("orgs", organizationIds.toArray(Long[]::new)).param("limit", limit).param("now", Timestamp.from(now))
                 .query((rs, n) -> new OutboxRow(rs.getLong(1), rs.getLong(2), rs.getString(3).trim(), rs.getString(4),
                         rs.getString(5), rs.getString(6), rs.getString(7), rs.getInt(8))).list();
+    }
+
+    /** 확인받은 행들을 한 번에 보냄으로 표시한다(릴레이 묶음) */
+    @OrganizationScopeExempt("릴레이가 방금 잠근 행 ID로만 갱신한다(배포 조직 행만 잠금, ADR-030)")
+    public void markSent(java.util.Collection<Long> ids, Instant now) {
+        if (ids.isEmpty()) {
+            return;
+        }
+        jdbc.sql("""
+                        UPDATE flow_outboxes SET sent_at = :now, attempts = LEAST(attempts + 1, 32767), last_error = NULL,
+                               next_attempt_at = NULL WHERE id = ANY(:ids)""")
+                .param("now", Timestamp.from(now)).param("ids", ids.toArray(Long[]::new)).update();
     }
 
     public void markSent(long organizationId, long id, Instant now) {
@@ -62,9 +75,13 @@ public class OutboxRepository {
                 .param("now", Timestamp.from(now)).param("id", id).param("org", organizationId).update();
     }
 
-    public void markFailed(long organizationId, long id, String error) {
-        jdbc.sql("UPDATE flow_outboxes SET attempts = LEAST(attempts + 1, 32767), last_error = :error WHERE id = :id AND organization_id = :org")
+    /** 실패를 기록하고 다음 시도 시각을 미룬다(재발행 간격) */
+    public void markFailed(long organizationId, long id, String error, Instant nextAttemptAt) {
+        jdbc.sql("""
+                        UPDATE flow_outboxes SET attempts = LEAST(attempts + 1, 32767), last_error = :error, next_attempt_at = :next
+                         WHERE id = :id AND organization_id = :org""")
                 .param("error", error == null ? null : error.length() > 500 ? error.substring(0, 500) : error)
+                .param("next", nextAttemptAt == null ? null : Timestamp.from(nextAttemptAt))
                 .param("id", id).param("org", organizationId).update();
     }
 

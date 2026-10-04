@@ -112,7 +112,7 @@ class FlowExecutionTest {
     }
 
     @Test
-    @DisplayName("[FLW-10.02] BR-FLW-16 노드 하나가 입력 하나에 내보내는 메시지 100개 초과는 FLOW_FANOUT_LIMIT")
+    @DisplayName("[FLW-10.02][AT-FLW-09.2] TC-FLW-215 노드 하나가 입력 1건에 150개를 내면 그 실행만 멈추고 error 포트로 FLOW_FANOUT_LIMIT")
     void fanoutLimit() {
         List<net.java21.data2flow.flow.plan.domain.NodeType> types = new java.util.ArrayList<>(
                 FlowTestHarness.registry(net.java21.data2flow.flow.node.service.SpaceDirectory.NONE).all());
@@ -128,7 +128,9 @@ class FlowExecutionTest {
         var r = h.send(FlowFixtures.temperature(1, 25, h.clock.instant()));
 
         assertThat(r.getFirst().steps()).anySatisfy(s -> assertThat(s.errorType()).isEqualTo("FLOW_FANOUT_LIMIT"));
-        assertThat(ports(r, "n-dbg00001")).hasSize(100);
+        assertThat(ports(r, "n-brst0001")).containsExactly("error");
+        assertThat(ports(r, "n-dbg00001")).as("남은 갈래는 실행하지 않는다").isEmpty();
+        assertThat(r.getFirst().errors()).isEqualTo(1);
     }
 
     /** 입력 하나에 150건을 내는 시험용 노드 */

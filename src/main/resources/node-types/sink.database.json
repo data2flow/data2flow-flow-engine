@@ -1,0 +1,23 @@
+{
+  "type": "sink.database", "typeVersion": 1, "category": "sink",
+  "name": "저장소 쓰기", "description": "레코드를 외부 저장소(PostgreSQL·MySQL·InfluxDB 등 저장소 연결)에 씁니다. 엔진은 쓰기 요청을 아웃박스로 내기만 하고 action이 배치·재시도·dead-letter로 씁니다(FLW-04)", "icon": "database",
+  "configSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["connectionId", "target"],
+    "properties": {
+      "connectionId": {"type": ["string", "integer"], "title": "저장소 연결", "x-widget": "sink-connection"},
+      "target": {"type": "string", "title": "대상 테이블·measurement", "minLength": 1, "maxLength": 128},
+      "mapping": {"type": "array", "title": "필드 매핑", "description": "field는 레코드 경로, $.로 시작하면 메시지 경로($.deviceId, $.measuredAt). 비우면 레코드의 원시값 필드를 그대로",
+        "items": {"type": "object", "required": ["field", "column"], "properties": {"field": {"type": "string"}, "column": {"type": "string"}}}},
+      "mode": {"type": "string", "enum": ["insert", "upsert"], "default": "insert"},
+      "upsertKeys": {"type": "array", "items": {"type": "string"}, "description": "upsert 키 열"},
+      "batchSize": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100}
+    }
+  },
+  "inputs": [{"name": "in", "type": "message"}],
+  "outputs": [{"name": "ok", "type": "message"}, {"name": "failed", "type": "message"}, {"name": "error", "type": "error"}],
+  "statePolicy": {"connectionId": "KEEP", "target": "KEEP", "mapping": "KEEP", "mode": "KEEP", "upsertKeys": "KEEP", "batchSize": "KEEP"},
+  "permissions": [],
+  "defaults": {"retry": {"maxAttempts": 3, "backoff": {"initialMs": 1000, "multiplier": 2, "maxMs": 30000}}}
+}

@@ -28,6 +28,10 @@ public class CachedSpaceDirectory implements SpaceDirectory, AutoCloseable {
     private final Duration ttl;
     private final Clock clock;
     private final Map<String, Entry> cache = new ConcurrentHashMap<>();
+    private final Map<String, TagEntry> tags = new ConcurrentHashMap<>();
+
+    private record TagEntry(Set<String> tags, Instant loadedAt) {
+    }
     private final Set<String> loading = ConcurrentHashMap.newKeySet();
     private final ExecutorService loader = Executors.newSingleThreadExecutor(
             Thread.ofPlatform().daemon().name("space-directory").factory());
@@ -75,8 +79,29 @@ public class CachedSpaceDirectory implements SpaceDirectory, AutoCloseable {
     }
 
     @Override
+    public Set<String> deviceTags(long organizationId, long deviceId) {
+        String key = organizationId + ":" + deviceId;
+        TagEntry e = tags.get(key);
+        if (e == null || e.loadedAt().plus(ttl).isBefore(clock.instant())) {
+            if (loading.add("tag:" + key)) {
+                loader.execute(() -> {
+                    try {
+                        tags.put(key, new TagEntry(Set.copyOf(core.deviceTags(organizationId, deviceId)), clock.instant()));
+                    } catch (RuntimeException ex) {
+                        log.warn("기기 {}의 태그를 읽지 못했습니다(메시지 meta.tags로만 판정): {}", deviceId, ex.getMessage());
+                    } finally {
+                        loading.remove("tag:" + key);
+                    }
+                });
+            }
+        }
+        return e == null ? Set.of() : e.tags();
+    }
+
+    @Override
     public void invalidateAll() {
         cache.replaceAll((k, v) -> new Entry(v.devices(), Instant.EPOCH));
+        tags.replaceAll((k, v) -> new TagEntry(v.tags(), Instant.EPOCH));
     }
 
     @Override

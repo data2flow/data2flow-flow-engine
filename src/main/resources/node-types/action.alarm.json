@@ -1,0 +1,21 @@
+{
+  "type": "action.alarm", "typeVersion": 1, "category": "action",
+  "name": "알람", "description": "알람 발생·해제 요청(alarm.signal)을 알람 서비스로 보냅니다. 같은 알람 키(규칙·플로우 노드·대상)에는 열린 알람이 하나입니다", "icon": "siren",
+  "configSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "mode": {"type": "string", "enum": ["raise", "clear"], "default": "raise"},
+      "severity": {"type": "string", "enum": ["CRITICAL", "MAJOR", "MINOR", "WARNING", "INFO"], "default": "MAJOR"},
+      "title": {"type": "string", "title": "제목", "description": "{{payload.co2}}처럼 메시지 값을 넣을 수 있음", "maxLength": 200},
+      "ruleId": {"type": ["string", "integer"], "description": "규칙이 컴파일된 플로우(RUL-01.01)"},
+      "metric": {"type": "string", "maxLength": 64},
+      "threshold": {"type": "object", "properties": {"raise": {"type": "number"}, "clear": {"type": "number"}}}
+    }
+  },
+  "inputs": [{"name": "in", "type": "message"}],
+  "outputs": [{"name": "out", "type": "message"}, {"name": "error", "type": "error"}],
+  "statePolicy": {"mode": "KEEP", "severity": "KEEP", "title": "KEEP", "ruleId": "KEEP", "metric": "KEEP", "threshold": "KEEP"},
+  "permissions": [],
+  "defaults": {"retry": {"maxAttempts": 3, "backoff": {"initialMs": 1000, "multiplier": 2, "maxMs": 30000}}}
+}

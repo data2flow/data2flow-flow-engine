@@ -4,6 +4,7 @@ import net.java21.data2flow.contracts.tenancy.OrganizationScopeExempt;
 import net.java21.data2flow.flow.plan.domain.Jsons;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
+import net.java21.data2flow.flow.runtime.domain.StoredState;
 import tools.jackson.databind.JsonNode;
 
 import java.sql.Timestamp;
@@ -24,27 +25,51 @@ public class NodeStateRepository {
         this.jdbc = jdbc;
     }
 
-    /** 잠그고 읽는다. 빈 상태면 null. 보관 중(삭제 노드)이던 행이면 살린다 */
-    public JsonNode lock(long organizationId, UUID flowId, String nodeId, String targetKey) {
+    /** 잠그고 읽는다(상태와 상태 지문). 보관 중(삭제 노드)이던 행이면 살린다 */
+    public StoredState lock(long organizationId, UUID flowId, String nodeId, String targetKey) {
         jdbc.sql("""
                         INSERT INTO flow_node_state (flow_id, node_id, target_key, organization_id)
                         VALUES (:flow, :node, :key, :org) ON CONFLICT DO NOTHING""")
                 .param("flow", flowId).param("node", nodeId).param("key", targetKey).param("org", organizationId).update();
-        String state = jdbc.sql("""
-                        SELECT state::text FROM flow_node_state
+        return jdbc.sql("""
+                        SELECT state::text, state_config::text FROM flow_node_state
                          WHERE flow_id = :flow AND node_id = :node AND target_key = :key AND organization_id = :org FOR UPDATE""")
                 .param("flow", flowId).param("node", nodeId).param("key", targetKey).param("org", organizationId)
-                .query(String.class).optional().orElse("{}");
-        JsonNode node = Jsons.MAPPER.readTree(state);
-        return node.isEmpty() ? null : node;
+                .query((rs, n) -> {
+                    JsonNode state = Jsons.MAPPER.readTree(rs.getString(1));
+                    String config = rs.getString(2);
+                    return new StoredState(state.isEmpty() ? null : state, config == null ? null : Jsons.MAPPER.readTree(config));
+                }).optional().orElse(StoredState.EMPTY);
     }
 
-    public void update(long organizationId, UUID flowId, String nodeId, String targetKey, JsonNode state, Instant now) {
+    public void update(long organizationId, UUID flowId, String nodeId, String targetKey, JsonNode state, JsonNode stateConfig,
+                       Instant now) {
         jdbc.sql("""
-                        UPDATE flow_node_state SET state = CAST(:state AS jsonb), updated_at = :now, retain_until = NULL
+                        UPDATE flow_node_state SET state = CAST(:state AS jsonb), state_config = CAST(:config AS jsonb),
+                               updated_at = :now, retain_until = NULL
                          WHERE flow_id = :flow AND node_id = :node AND target_key = :key AND organization_id = :org""")
-                .param("state", state == null ? "{}" : state.toString()).param("now", Timestamp.from(now))
+                .param("state", state == null ? "{}" : state.toString())
+                .param("config", stateConfig == null ? null : stateConfig.toString()).param("now", Timestamp.from(now))
                 .param("flow", flowId).param("node", nodeId).param("key", targetKey).param("org", organizationId).update();
+    }
+
+    /**
+     * RESET 정리(FLW-06.03): 지금 노드와 지문이 다른 상태 행을 지운다. 읽을 때 이미 빈 상태로 다루므로(지연 적용) 정리는 이전 계획의 드레인이
+     * 끝난 뒤 저장 공간을 비우는 일이다. 지운 행 수
+     */
+    public int deleteMismatched(long organizationId, UUID flowId, String nodeId, JsonNode currentConfig) {
+        return jdbc.sql("""
+                        DELETE FROM flow_node_state
+                         WHERE flow_id = :flow AND node_id = :node AND organization_id = :org AND retain_until IS NULL
+                           AND state_config IS NOT NULL AND state_config <> CAST(:config AS jsonb)""")
+                .param("flow", flowId).param("node", nodeId).param("org", organizationId)
+                .param("config", currentConfig.toString()).update();
+    }
+
+    /** 상태 행 수(시험·조회) */
+    public long count(long organizationId, UUID flowId, String nodeId) {
+        return jdbc.sql("SELECT count(*) FROM flow_node_state WHERE flow_id = :flow AND node_id = :node AND organization_id = :org")
+                .param("flow", flowId).param("node", nodeId).param("org", organizationId).query(Long.class).single();
     }
 
     /** 읽기만(잠그지 않음, 시험·조회). 없으면 null */

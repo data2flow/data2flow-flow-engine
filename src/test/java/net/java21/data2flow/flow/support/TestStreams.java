@@ -81,6 +81,17 @@ public final class TestStreams implements AutoCloseable {
         }
     }
 
+    /** 확인을 기다리지 않고 발행한다(부하 생성). 확인되면 true로 완료 */
+    public CompletableFuture<Boolean> publishAsync(CanonicalTelemetry telemetry) {
+        CompletableFuture<Boolean> confirmed = new CompletableFuture<>();
+        var builder = producer.messageBuilder().properties().messageId(telemetry.messageId().toString()).messageBuilder()
+                .applicationProperties();
+        MessageHeaders.of(telemetry).forEach((k, v) -> builder.entry(k, v.toString()));
+        builder.entry("routingKey", telemetry.routingKey());
+        producer.send(builder.messageBuilder().addData(CODEC.write(telemetry)).build(), status -> confirmed.complete(status.isConfirmed()));
+        return confirmed;
+    }
+
     private final List<ActionRequest> received = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     /** action.commands 큐에 지금 있는 행동 요청을 모두 꺼내(ACK) 받은 목록에 더하고, 그 플로우의 것만 돌려준다 */

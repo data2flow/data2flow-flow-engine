@@ -1,0 +1,21 @@
+{
+  "type": "condition.rateOfChange", "typeVersion": 1, "category": "condition",
+  "name": "변화율", "description": "창 안에서 값이 기준 이상 올라가거나 내려갔는지 봅니다(측정 시각 기준)", "icon": "trending-up",
+  "configSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["metric", "window", "delta"],
+    "properties": {
+      "metric": {"type": "string", "maxLength": 64},
+      "window": {"type": "string", "format": "duration", "default": "PT10M"},
+      "delta": {"type": "number", "exclusiveMinimum": 0},
+      "direction": {"type": "string", "enum": ["up", "down", "any"], "default": "any"},
+      "emit": {"type": "string", "enum": ["always", "change"], "default": "always", "description": "change면 판정이 바뀔 때만 내보냄"}
+    }
+  },
+  "inputs": [{"name": "in", "type": "message"}],
+  "outputs": [{"name": "true", "type": "message"}, {"name": "false", "type": "message"}, {"name": "error", "type": "error"}],
+  "statePolicy": {"metric": "RESET", "window": "KEEP", "delta": "KEEP", "direction": "KEEP", "emit": "KEEP"},
+  "permissions": [],
+  "defaults": {"retry": {"maxAttempts": 0}}
+}

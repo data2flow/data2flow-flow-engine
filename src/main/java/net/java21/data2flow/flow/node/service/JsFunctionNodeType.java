@@ -33,7 +33,8 @@ import java.util.List;
  *   <li>null·undefined → 아무것도 내보내지 않음</li>
  *   <li>예외·시간 초과·금지 API → error 포트 {@code SCRIPT_ERROR}(상세 코드 SCRIPT_TIMEOUT 등을 메시지에)</li>
  * </ul>
- * {@code scriptRef}(SCR 스크립트 참조)는 M4에서 만든다.
+ * {@code scriptRef}({@code s-{id}@v{n}}, M4): {@code code} 대신 SCR 스크립트의 활성 버전 코드를 컴파일할 때 읽어 쓴다(core API-SCR-32).
+ * 코드 계약은 같다(함수 본문 또는 {@code main(msg, ctx)}).
  */
 public class JsFunctionNodeType implements NodeType {
 
@@ -42,10 +43,17 @@ public class JsFunctionNodeType implements NodeType {
     /** 샌드박스가 ctx에 더할 읽기 전용 필드(공용 샌드박스의 기본 ctx 필드 외) */
     public static final List<String> CONTEXT_KEYS = List.of("flow", "node");
     private final FlowNodeType descriptor = NodeDescriptors.load(TYPE);
+    private static final java.util.regex.Pattern SCRIPT_REF = java.util.regex.Pattern.compile("^s-(\\d+)@v(\\d+)$");
     private final ScriptSandbox sandbox;
+    private final ScriptDirectory scripts;
 
     public JsFunctionNodeType(ScriptSandbox sandbox) {
+        this(sandbox, ScriptDirectory.NONE);
+    }
+
+    public JsFunctionNodeType(ScriptSandbox sandbox, ScriptDirectory scripts) {
         this.sandbox = sandbox;
+        this.scripts = scripts;
     }
 
     @Override
@@ -56,10 +64,10 @@ public class JsFunctionNodeType implements NodeType {
     @Override
     public CompiledNode compile(FlowNode node, CompileContext context) {
         JsonNode config = node.config() == null ? Jsons.object() : node.config();
-        if (config.hasNonNull("scriptRef") && !config.hasNonNull("code")) {
-            throw new NodeConfigException("config.scriptRef", "스크립트 참조(scriptRef)는 아직 지원하지 않습니다(M4). code를 쓰세요");
-        }
         String code = Jsons.text(config, "code");
+        if (config.hasNonNull("scriptRef") && (code == null || code.isBlank())) {
+            code = resolve(Jsons.text(config, "scriptRef"), context.organizationId());
+        }
         if (code == null || code.isBlank()) {
             throw new NodeConfigException("config.code", "코드가 필요합니다");
         }
@@ -87,6 +95,23 @@ public class JsFunctionNodeType implements NodeType {
         ctx.putObject("flow").put("id", context.flowId().toString()).put("version", context.version());
         ctx.putObject("node").put("id", node.id()).put("name", node.name() == null ? node.id() : node.name());
         return new Compiled(sandbox, wrapped, sourceName(context, node), List.copyOf(ports), ctx.toString());
+    }
+
+    /** {@code s-{id}@v{n}} → 코드(SCR 활성 버전). 형식이 틀리거나 찾지 못하면 {@link NodeConfigException} */
+    private String resolve(String ref, long organizationId) {
+        java.util.regex.Matcher m = SCRIPT_REF.matcher(ref == null ? "" : ref.trim());
+        if (!m.matches()) {
+            throw new NodeConfigException("config.scriptRef", "스크립트 참조는 s-{id}@v{n} 형식입니다: " + ref);
+        }
+        try {
+            return scripts.code(organizationId, Long.parseLong(m.group(1)), Integer.parseInt(m.group(2)))
+                    .orElseThrow(() -> new NodeConfigException("config.scriptRef", "SCRIPT_NOT_FOUND",
+                            "스크립트 " + ref + "를 찾지 못했습니다(없거나 그 버전이 활성 버전이 아님)"));
+        } catch (NodeConfigException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw new NodeConfigException("config.scriptRef", "스크립트 " + ref + "를 읽지 못했습니다: " + e.getMessage());
+        }
     }
 
     private static String sourceName(CompileContext context, FlowNode node) {

@@ -45,9 +45,14 @@ public record FlowEngineProperties(String flywayMode, String instanceId, String 
      * @param maxFanout      노드 하나가 입력 하나에 내보내는 메시지 수 상한(BR-FLW-16)
      * @param maxStateBytes  노드 상태 대상 키당 상한(BR-FLW-29, 256KB)
      * @param defaultValidity 제어 명령 유효 시간 기본값(validitySeconds 없을 때)
+     * @param errorRateThreshold DEGRADED 판정 오류율 기준(BR-FLW-26, 기본 0.1)
      */
     public record Execution(Duration retryInitial, Duration retryMax, int maxHops, int maxFanout, int maxStateBytes,
-                            Duration defaultValidity) {
+                            Duration defaultValidity, double errorRateThreshold) {
+
+        public Execution {
+            errorRateThreshold = errorRateThreshold <= 0 || errorRateThreshold > 1 ? 0.1 : errorRateThreshold;
+        }
     }
 
     /** 디버그 샘플 상한(BR-FLW-12): 노드당 초당 5건, 디버그 켠 노드 50건 */

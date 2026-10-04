@@ -33,6 +33,8 @@ import java.util.Set;
  *       발생한다. 중간에 거짓 메시지가 오면 PENDING을 버리고 타이머를 취소한다.</li>
  *   <li><b>히스테리시스 {@code clear}</b>: ACTIVE는 {@code >}·{@code >=}이면 값 ≤ clear, {@code <}·{@code <=}이면 값 ≥ clear일 때 해제된다
  *       (예: 발생 27, 해제 26이면 26.5는 해제되지 않음). 없으면 조건이 거짓이 될 때 해제.</li>
+ *   <li><b>연속 횟수 {@code repeat}</b>(BR-RUL-05, RUL-01.12): 조건이 연속 n번 맞아야 ACTIVE. 한 번 깨지면 0부터. {@code for}와 함께면 둘 다
+ *       채워야 한다(타이머가 먼저 만기가 되면 그 뒤 참 메시지에서 횟수만 본다).</li>
  *   <li>메시지에 그 측정 항목이 없으면 아무것도 내보내지 않고, 숫자가 아니면 error 포트({@code TYPE_MISMATCH}).</li>
  * </ul>
  * 타이머 발화로 나가는 메시지는 PENDING을 시작한 메시지(이후 마지막 참 메시지로 갱신)이고 원인 메시지 ID도 그 메시지의 것이라, 같은 발생은
@@ -83,17 +85,22 @@ public class ThresholdConditionNodeType implements NodeType {
             }
         }
         Double clear = Jsons.number(config, "clear");
-        if (config.has("repeat")) {
-            throw new NodeConfigException("config.repeat", "repeat는 아직 지원하지 않습니다(M4)");
+        int repeat = 1;
+        JsonNode r = config.get("repeat");
+        if (r != null && !r.isNull()) {
+            if (!r.isIntegralNumber() || r.asInt() < 1 || r.asInt() > 100) {
+                throw new NodeConfigException("config.repeat", "연속 횟수(repeat)는 1~100 정수입니다: " + r);
+            }
+            repeat = r.asInt();
         }
-        return new Compiled(Jsons.text(config, "metric"), op, value == null ? 0 : value, min, max, forDuration, clear);
+        return new Compiled(Jsons.text(config, "metric"), op, value == null ? 0 : value, min, max, forDuration, clear, repeat);
     }
 
     /** 상태 단계 */
     enum Phase { IDLE, PENDING, ACTIVE }
 
-    record Compiled(String metric, String op, double value, double min, double max, Duration forDuration, Double clear)
-            implements CompiledNode {
+    record Compiled(String metric, String op, double value, double min, double max, Duration forDuration, Double clear,
+                    int repeat) implements CompiledNode {
 
         @Override
         public List<String> outputs() {
@@ -101,7 +108,11 @@ public class ThresholdConditionNodeType implements NodeType {
         }
 
         boolean stateful() {
-            return forDuration != null || clear != null;
+            return forDuration != null || clear != null || repeat > 1;
+        }
+
+        boolean waits() {
+            return forDuration != null && !forDuration.isZero();
         }
 
         boolean test(double v) {
@@ -153,30 +164,36 @@ public class ThresholdConditionNodeType implements NodeType {
                     if (!cond) {
                         return;
                     }
-                    if (forDuration == null || forDuration.isZero()) {
+                    if (!waits() && repeat <= 1) {
                         ctx.saveState(key, phaseState(Phase.ACTIVE));
                         ctx.emit("true", message);
                         return;
                     }
                     ObjectNode next = phaseState(Phase.PENDING);
                     next.put("since", at.toString());
+                    next.put("count", 1);
                     next.put("pendingMessageId", message.triggerMessageId());
                     next.set("message", message.body());
-                    long timer = ctx.scheduleTimer(TimerKind.RECHECK, key, ctx.now().plus(forDuration), timerContext(message));
-                    next.put("timerId", timer);
+                    if (waits()) {
+                        long timer = ctx.scheduleTimer(TimerKind.RECHECK, key, ctx.now().plus(forDuration), timerContext(message));
+                        next.put("timerId", timer);
+                    }
                     ctx.saveState(key, next);
                 }
                 case PENDING -> {
                     long timer = state.path("timerId").asLong(0);
                     if (!cond) {
+                        // 조건이 한 번이라도 깨지면 지속 시간·연속 횟수를 처음부터(BR-RUL-03·05)
                         if (timer > 0) {
                             ctx.cancelTimer(timer);
                         }
                         ctx.saveState(key, phaseState(Phase.IDLE));
                         return;
                     }
+                    int count = state.path("count").asInt(1) + 1;
                     Instant since = Instant.parse(state.path("since").asString());
-                    if (!at.isBefore(since.plus(forDuration))) {
+                    boolean elapsed = !waits() || state.path("elapsed").asBoolean(false) || !at.isBefore(since.plus(forDuration));
+                    if (elapsed && count >= repeat) {
                         if (timer > 0) {
                             ctx.cancelTimer(timer);
                         }
@@ -185,6 +202,7 @@ public class ThresholdConditionNodeType implements NodeType {
                         return;
                     }
                     ObjectNode next = (ObjectNode) state.deepCopy();
+                    next.put("count", count);
                     next.set("message", message.body());
                     ctx.saveState(key, next);
                 }
@@ -203,6 +221,14 @@ public class ThresholdConditionNodeType implements NodeType {
             if (state == null || !"PENDING".equals(state.path("phase").asString(""))
                     || state.path("timerId").asLong(0) != fire.timerId()) {
                 return; // 이미 해제·발생했거나 다른 타이머(오래된 발화)
+            }
+            if (state.path("count").asInt(1) < repeat) {
+                // 지속 시간은 채웠지만 연속 횟수가 모자람: 다음 참 메시지에서 횟수만 보면 된다(BR-RUL-05)
+                ObjectNode next = (ObjectNode) state.deepCopy();
+                next.put("elapsed", true);
+                next.remove("timerId");
+                ctx.saveState(fire.targetKey(), next);
+                return;
             }
             JsonNode body = state.get("message");
             String messageId = state.path("pendingMessageId").asString(null);
