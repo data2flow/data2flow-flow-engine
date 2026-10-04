@@ -59,6 +59,7 @@ public final class FlowEngineProcess implements AutoCloseable {
                     "--data2flow.flow.core.base-url=" + coreBaseUrl,
                     "--data2flow.flow.instance-id=" + name,
                     "--data2flow.flow.script.warm-up-rounds=1",
+                    "--data2flow.flow.script.warm-up-max-rounds=1",
                     "--server.port=0",
                     "--management.server.port=" + management));
             Process process = new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(log.toFile()).start();

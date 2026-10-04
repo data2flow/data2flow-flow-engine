@@ -11,7 +11,7 @@
 | 영역 | 내용 |
 |---|---|
 | 불변 실행 계획 | 정의(`FlowDefinition`) → 컴파일(노드 설정·포트 타입·순환·트리거 검사, 오류는 `{field, code, message}`) → `AtomicReference`로 원자적 전환, 메시지는 시작할 때 읽은 계획 하나로(BR-FLW-06), 이전 계획은 참조 수 0이면 드레인 |
-| 노드(9종) | `trigger.telemetry`, `condition.threshold`(지속 시간·히스테리시스), `condition.switch`, `transform.map`, `transform.aggregate`, `transform.js`(GraalJS 커뮤니티판 샌드박스), `flow.delay`, `action.control`, `debug.log`. 카탈로그는 `src/main/resources/node-types/*.json` |
+| 노드(9종) | `trigger.telemetry`, `condition.threshold`(지속 시간·히스테리시스), `condition.switch`, `transform.map`, `transform.aggregate`, `transform.js`(GraalJS 커뮤니티판 샌드박스, 공용 모듈 `data2flow-script-sandbox`·ADR-046), `flow.delay`, `action.control`, `debug.log`. 카탈로그는 `src/main/resources/node-types/*.json` |
 | 상태·타이머 | `flow_node_state`(대상 키당 256KB), `flow_timers`(만기 후보 → 상태 잠금 → `FOR UPDATE SKIP LOCKED` → 발화 → FIRED), `flow_partition_progress`(다시 읽은 메시지 건너뛰기) |
 | 행동 | `flow_outboxes`(멱등 키 `sha256(flowId, nodeId, triggerMessageId)`, 버전 없음, BR-FLW-13) → 릴레이가 publisher confirm 뒤 `sent_at`. 출처 `source.spaceId`는 트리거 메시지의 공간(없으면 공간 대상)이고 action이 기기 대상 명령의 샌드박스 판정(BR-ACT-23)에 쓴다 |
 | 오류 격리 | 노드 예외는 error 포트(와이어가 없으면 그 갈래만 끝), 플로우마다 따로 커밋, DB 장애만 재시도 |

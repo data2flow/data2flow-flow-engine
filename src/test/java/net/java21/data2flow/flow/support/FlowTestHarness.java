@@ -26,7 +26,7 @@ import net.java21.data2flow.flow.plan.service.NodeTypeRegistry;
 import net.java21.data2flow.flow.runtime.domain.ExecutionReport;
 import net.java21.data2flow.flow.runtime.domain.InMemoryExecutionStore;
 import net.java21.data2flow.flow.runtime.service.FlowExecutor;
-import net.java21.data2flow.flow.script.service.ScriptSandbox;
+import net.java21.data2flow.script.sandbox.ScriptSandbox;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
 

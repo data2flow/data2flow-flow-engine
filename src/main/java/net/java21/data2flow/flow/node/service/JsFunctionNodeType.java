@@ -9,9 +9,9 @@ import net.java21.data2flow.flow.plan.domain.Jsons;
 import net.java21.data2flow.flow.plan.domain.NodeConfigException;
 import net.java21.data2flow.flow.plan.domain.NodeContext;
 import net.java21.data2flow.flow.plan.domain.NodeType;
-import net.java21.data2flow.flow.script.domain.ScriptFailure;
-import net.java21.data2flow.flow.script.domain.ScriptOutcome;
-import net.java21.data2flow.flow.script.service.ScriptSandbox;
+import net.java21.data2flow.script.sandbox.ScriptFailure;
+import net.java21.data2flow.script.sandbox.ScriptOutcome;
+import net.java21.data2flow.script.sandbox.ScriptSandbox;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -20,8 +20,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * {@code transform.js}(FLW-02 JavaScript 함수, TC-FLW-046, ADR-008). GraalJS 커뮤니티판 샌드박스({@link ScriptSandbox}, SCR와 같은 제한:
- * CPU 50ms·문장 100만·출력 64KB·호스트 접근 금지)에서 실행한다.
+ * {@code transform.js}(FLW-02 JavaScript 함수, TC-FLW-046, ADR-008). GraalJS 커뮤니티판 샌드박스({@link ScriptSandbox}, 공용 모듈
+ * data2flow-script-sandbox(ADR-046), SCR와 같은 제한: CPU 50ms·문장 100만·출력 64KB·호스트 접근 금지)에서 실행한다. 샌드박스는
+ * ctx 추가 필드 {@link #CONTEXT_KEYS}(flow·node)로 만들어야 한다({@code FlowEngineConfig}).
  *
  * <p>코드 계약(FLW-api §5.2): 코드는 {@code function (msg, ctx)}의 <b>본문</b>이다({@code return {...msg, value: msg.payload.t / 10};}).
  * 본문 안에 {@code function main(msg, ctx)}를 정의하고 아무것도 반환하지 않으면 엔진이 {@code main(msg, ctx)}를 부른다.
@@ -38,6 +39,8 @@ public class JsFunctionNodeType implements NodeType {
 
     public static final String TYPE = "transform.js";
     static final String ENTRY = "__d2f_flow";
+    /** 샌드박스가 ctx에 더할 읽기 전용 필드(공용 샌드박스의 기본 ctx 필드 외) */
+    public static final List<String> CONTEXT_KEYS = List.of("flow", "node");
     private final FlowNodeType descriptor = NodeDescriptors.load(TYPE);
     private final ScriptSandbox sandbox;
 

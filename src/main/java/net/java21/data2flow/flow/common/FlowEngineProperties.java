@@ -1,6 +1,7 @@
 package net.java21.data2flow.flow.common;
 
-import net.java21.data2flow.flow.script.domain.ScriptLimits;
+import net.java21.data2flow.script.sandbox.ScriptLimits;
+import net.java21.data2flow.script.sandbox.ScriptSandbox;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
@@ -58,14 +59,28 @@ public record FlowEngineProperties(String flywayMode, String instanceId, String 
                             Duration staleInstance, Duration heartbeat, Duration cleanupInterval) {
     }
 
-    /** JS 함수 노드 실행 제한(SCR-02.02와 같은 값) */
+    /**
+     * JS 함수 노드 실행 제한(SCR-02.02와 같은 값)과 시작 예열(공용 샌드박스, ADR-046).
+     *
+     * @param warmUpRounds       예열 최소 반복 수
+     * @param warmUpMaxRounds    예열 최대 반복 수
+     * @param warmUpStableRounds 목표 아래가 이어져야 끝내는 반복 수
+     * @param warmUpTarget       대표 스크립트 1회의 감시 구간 CPU 시간 목표(기본 10ms = 한도 50ms의 1/5)
+     * @param warmUpMaxTime      예열 최대 시간(시작 지연 상한)
+     */
     public record Script(Duration cpuTime, Duration wallTime, long statementLimit, int maxOutputBytes, int maxLogBytes,
                          int maxLogEntries, int maxStringLength, int maxArrayLength, int maxCodeBytes,
-                         int maxOutputDepth, int warmUpRounds) {
+                         int maxOutputDepth, int warmUpRounds, int warmUpMaxRounds, int warmUpStableRounds,
+                         Duration warmUpTarget, Duration warmUpMaxTime) {
 
         public ScriptLimits toLimits() {
             return new ScriptLimits(cpuTime, wallTime, statementLimit, maxOutputBytes, maxLogBytes, maxLogEntries,
                     maxStringLength, maxArrayLength, maxCodeBytes, maxOutputDepth);
+        }
+
+        public ScriptSandbox.WarmUpPolicy toWarmUpPolicy() {
+            return new ScriptSandbox.WarmUpPolicy(warmUpRounds, warmUpMaxRounds, warmUpStableRounds, warmUpTarget,
+                    warmUpMaxTime);
         }
     }
 }

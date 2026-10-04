@@ -27,8 +27,6 @@ data2flow:
     retention:
       heartbeat: 5s
       cleanup-interval: 1m
-    script:
-      warm-up-rounds: 2
 logging:
   level:
     net.java21.data2flow: INFO
