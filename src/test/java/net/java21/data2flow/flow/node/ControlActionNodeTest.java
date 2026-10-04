@@ -44,6 +44,7 @@ class ControlActionNodeTest {
             assertThat(req.source().flowVersion()).isEqualTo(1);
             assertThat(req.routingKey()).isEqualTo("command");
             assertThat(req.commandPayload().target().spaceId()).isEqualTo(31L);
+            assertThat(req.source().spaceId()).isEqualTo(FlowFixtures.SPACE);
             assertThat(req.commandPayload().args()).containsEntry("mode", "cool");
             MessageSchemas.assertValid(req);
         });
@@ -62,6 +63,25 @@ class ControlActionNodeTest {
         assertThat(h.store.outbox()).hasSize(2).extracting(o -> o.action().idempotencyKey()).containsExactly(
                 ActionIdempotencyKeys.flow(FlowFixtures.FLOW.toString(), NODE, t.messageId().toString(), 0),
                 ActionIdempotencyKeys.flow(FlowFixtures.FLOW.toString(), NODE, t.messageId().toString(), 1));
+    }
+
+    @Test
+    @DisplayName("[FLW-05.01] SIM-07.03 BR-ACT-23 기기 대상 명령의 출처 공간은 트리거 공간, 트리거에 공간이 없으면 공간 대상의 공간·없으면 비움")
+    void sourceSpace() {
+        FlowTestHarness device = FlowTestHarness.node("action.control", """
+                {"target":{"deviceIds":["41"]},"capability":"Switch","command":"set","args":{"on":true}}""");
+        device.send(FlowFixtures.temperature(1, 28, device.clock.instant()));
+        device.send(FlowFixtures.telemetry(2, null, "temperature", 28, device.clock.instant()));
+        List<ActionRequest> sent = device.store.outbox().stream()
+                .map(o -> CODEC.read(o.action().payload().toString().getBytes(), ActionRequest.class)).toList();
+        assertThat(sent).extracting(r -> r.source().spaceId()).containsExactly(FlowFixtures.SPACE, null);
+        sent.forEach(MessageSchemas::assertValid);
+
+        FlowTestHarness space = FlowTestHarness.node("action.control", """
+                {"target":{"spaceId":"77","relation":"controls"},"capability":"Switch","command":"set","args":{"on":true}}""");
+        space.send(FlowFixtures.telemetry(2, null, "temperature", 28, space.clock.instant()));
+        assertThat(CODEC.read(space.store.outbox().getFirst().action().payload().toString().getBytes(), ActionRequest.class)
+                .source().spaceId()).isEqualTo(77L);
     }
 
     @Test

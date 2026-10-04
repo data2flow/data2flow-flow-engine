@@ -39,7 +39,9 @@ import java.util.Map;
  * <ul>
  *   <li>멱등 키 {@code ActionIdempotencyKeys.flow(flowId, nodeId, triggerMessageId)}, 기기 목록 대상이면 기기마다 분할 인덱스를 붙인다.
  *       <b>버전은 넣지 않는다</b>(BR-FLW-13).</li>
- *   <li>출처 {@code CommandSource.flow(flowId, version, nodeId, triggerMessageId)}, 우선순위는 출처가 정하는 AUTO(BR-FLW-37, 다른 값이면 컴파일 오류).</li>
+ *   <li>출처 {@code CommandSource.flow(flowId, version, nodeId, triggerMessageId, spaceId)}, 우선순위는 출처가 정하는 AUTO(BR-FLW-37, 다른 값이면 컴파일 오류).
+ *       출처 공간 {@code spaceId}는 트리거 메시지의 공간({@code body.spaceId}), 없으면 공간 대상의 공간이다. action은 기기 대상 명령도
+ *       이 값으로 샌드박스 판정(BR-ACT-23)을 한다.</li>
  *   <li>유효 시각 = 처리 시각 + validitySeconds(기본 600초).</li>
  *   <li>표준 기능은 컴파일할 때 기능 스키마로 인자를 검사한다(BR-ACT-01 1단계. 모델 제약·조직 한계는 action이 실행할 때).</li>
  *   <li>결과 포트(ok·failed, EVT-ACT-01 대기)는 M4에서 만든다. M3는 {@code awaitResult=false}로 보내고 포트로 내보내지 않는다.</li>
@@ -156,8 +158,10 @@ public class ControlActionNodeType implements NodeType {
         public void onMessage(FlowMessage message, NodeContext ctx) {
             Instant now = ctx.now();
             Clock fixed = Clock.fixed(now, ZoneOffset.UTC);
-            CommandSource source = CommandSource.flow(flowId, ctx.flowVersion(), nodeId, message.triggerMessageId());
+            Long triggerSpace = sourceSpace(message);
             for (int i = 0; i < targets.size(); i++) {
+                Long space = triggerSpace != null ? triggerSpace : targets.get(i).spaceId();
+                CommandSource source = CommandSource.flow(flowId, ctx.flowVersion(), nodeId, message.triggerMessageId(), space);
                 String key = targets.size() == 1
                         ? ActionIdempotencyKeys.flow(flowId, nodeId, message.triggerMessageId())
                         : ActionIdempotencyKeys.flow(flowId, nodeId, message.triggerMessageId(), i);
@@ -165,6 +169,15 @@ public class ControlActionNodeType implements NodeType {
                         new CommandPayload(targets.get(i), capability, command, args, false), fixed);
                 ctx.action(new ActionDraft("COMMAND", MessagingNames.EXCHANGE_ACTIONS, request.routingKey(), key,
                         Jsons.MAPPER.valueToTree(request), capability + "." + command + args));
+            }
+        }
+
+        /** 트리거 메시지의 공간(텔레메트리 {@code spaceId}). 없거나 ID가 아니면 null */
+        private static Long sourceSpace(FlowMessage message) {
+            try {
+                return Jsons.id(message.body(), "spaceId", "spaceId");
+            } catch (NodeConfigException e) {
+                return null;
             }
         }
     }
