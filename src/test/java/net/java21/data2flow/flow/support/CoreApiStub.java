@@ -29,6 +29,11 @@ public final class CoreApiStub implements AutoCloseable {
     private final Map<UUID, ObjectNode> flows = new ConcurrentHashMap<>();
     private final Map<Long, Set<Long>> spaces = new ConcurrentHashMap<>();
     private final AtomicLong version = new AtomicLong(1);
+    private final List<ObjectNode> emergencyStops = new CopyOnWriteArrayList<>();
+    private final List<ObjectNode> maintenance = new CopyOnWriteArrayList<>();
+    private final List<ObjectNode> scripts = new CopyOnWriteArrayList<>();
+    private final Map<Long, List<String>> tags = new ConcurrentHashMap<>();
+    private final List<net.java21.data2flow.contracts.message.CanonicalTelemetry> history = new CopyOnWriteArrayList<>();
     private final List<String> calls = new CopyOnWriteArrayList<>();
     private volatile long organizationId = FlowFixtures.ORG;
     private volatile boolean failing;
@@ -102,6 +107,45 @@ public final class CoreApiStub implements AutoCloseable {
         spaces.put(spaceId, devices);
     }
 
+    /** 진행 중인 비상 정지(API-ACT-21 내부판) */
+    public void emergencyStop(long id, long organization, Long spaceId) {
+        ObjectNode s = Jsons.object().put("emergencyStopId", Long.toString(id)).put("organizationId", Long.toString(organization));
+        ObjectNode scope = s.putObject("scope");
+        if (spaceId == null) {
+            scope.put("type", "ORG");
+        } else {
+            scope.put("type", "SPACE").put("spaceId", Long.toString(spaceId)).put("includeChildren", true);
+        }
+        emergencyStops.add(s);
+    }
+
+    public void clearEmergencyStops() {
+        emergencyStops.clear();
+    }
+
+    /** 진행 중인 유지보수 창(API-OPS-24) */
+    public void maintenance(long windowId, String targetType, long targetId, boolean pauseAutomation) {
+        maintenance.add(Jsons.object().put("windowId", Long.toString(windowId)).put("targetType", targetType)
+                .put("targetId", Long.toString(targetId)).put("pauseAutomation", pauseAutomation));
+    }
+
+    /** 스크립트 실행 묶음 항목(API-SCR-32, 활성 버전) */
+    public void script(long scriptId, int versionNo, String code) {
+        scripts.add(Jsons.object().put("scriptId", Long.toString(scriptId)).put("versionNo", versionNo).put("code", code)
+                .put("kind", "FLOW"));
+    }
+
+    /** 기기 태그(API-DEV-122 tags[]) */
+    public void tags(long deviceId, List<String> values) {
+        tags.put(deviceId, List.copyOf(values));
+    }
+
+    /** 과거 텔레메트리(재생용 core 내부 조회) */
+    public void history(List<net.java21.data2flow.contracts.message.CanonicalTelemetry> items) {
+        history.clear();
+        history.addAll(items);
+    }
+
     private void handle(HttpExchange exchange) throws IOException {
         String path = exchange.getRequestURI().getPath();
         String query = exchange.getRequestURI().getQuery();
@@ -134,6 +178,56 @@ public final class CoreApiStub implements AutoCloseable {
             }
             return;
         }
+        if (path.equals("/internal/core/emergency-stops")) {
+            send(exchange, 200, list(emergencyStops));
+            return;
+        }
+        if (path.equals("/internal/core/maintenance-windows")) {
+            send(exchange, 200, list(maintenance));
+            return;
+        }
+        if (path.equals("/internal/core/scripts/runtime-bundle")) {
+            ObjectNode response = Jsons.object().put("bundleVersion", 1);
+            ArrayNode items = response.putArray("scripts");
+            scripts.forEach(items::add);
+            send(exchange, 200, envelope(response));
+            return;
+        }
+        if (path.startsWith("/internal/core/devices/") && path.endsWith("/runtime")) {
+            long deviceId = Long.parseLong(path.split("/")[4]);
+            ObjectNode response = Jsons.object().put("deviceId", Long.toString(deviceId));
+            ArrayNode t = response.putArray("tags");
+            tags.getOrDefault(deviceId, List.of()).forEach(t::add);
+            send(exchange, 200, envelope(response));
+            return;
+        }
+        if (path.equals("/internal/core/telemetry/history")) {
+            Map<String, String> q = new java.util.HashMap<>();
+            for (String part : query.split("&")) {
+                String[] kv = part.split("=", 2);
+                q.put(kv[0], java.net.URLDecoder.decode(kv[1], StandardCharsets.UTF_8));
+            }
+            java.time.Instant from = java.time.Instant.parse(q.get("from"));
+            java.time.Instant to = java.time.Instant.parse(q.get("to"));
+            int size = Integer.parseInt(q.get("size"));
+            int start = q.containsKey("cursor") ? Integer.parseInt(q.get("cursor")) : 0;
+            List<net.java21.data2flow.contracts.message.CanonicalTelemetry> range = history.stream()
+                    .filter(t -> !t.measuredAt().isBefore(from) && t.measuredAt().isBefore(to)).toList();
+            int end = Math.min(range.size(), start + size);
+            ObjectNode body = Jsons.object();
+            body.putObject("header").put("isSuccessful", true).put("resultCode", "SUCCESS");
+            ArrayNode items = body.putArray("responses");
+            range.subList(start, end).forEach(t -> items.add(Jsons.MAPPER.readTree(net.java21.data2flow.contracts.message.MessageCodec
+                    .create().write(t))));
+            body.put("totalCount", range.size());
+            if (end < range.size()) {
+                body.put("nextCursor", Integer.toString(end));
+            } else {
+                body.putNull("nextCursor");
+            }
+            send(exchange, 200, body.toString());
+            return;
+        }
         if (path.startsWith("/internal/core/spaces/") && path.endsWith("/devices")) {
             long spaceId = Long.parseLong(path.split("/")[4]);
             ObjectNode body = Jsons.object();
@@ -146,6 +240,15 @@ public final class CoreApiStub implements AutoCloseable {
             return;
         }
         send(exchange, 404, "{}");
+    }
+
+    private static String list(List<ObjectNode> items) {
+        ObjectNode body = Jsons.object();
+        body.putObject("header").put("isSuccessful", true).put("resultCode", "SUCCESS");
+        ArrayNode list = body.putArray("responses");
+        items.forEach(list::add);
+        body.put("totalCount", items.size());
+        return body.toString();
     }
 
     private static String envelope(ObjectNode response) {

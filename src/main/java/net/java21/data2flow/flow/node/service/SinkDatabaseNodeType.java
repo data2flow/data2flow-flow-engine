@@ -118,7 +118,7 @@ public class SinkDatabaseNodeType implements NodeType {
 
         @Override
         public void onMessage(FlowMessage message, NodeContext ctx) {
-            List<Map<String, Object>> records = new ArrayList<>();
+            List<Map<String, Object>> collected = new ArrayList<>();
             JsonNode payload = message.body().path("payload");
             List<JsonNode> items = new ArrayList<>();
             if (payload.isArray()) {
@@ -129,8 +129,12 @@ public class SinkDatabaseNodeType implements NodeType {
             for (JsonNode item : items) {
                 Map<String, Object> record = record(message, item);
                 if (!record.isEmpty()) {
-                    records.add(record);
+                    collected.add(record);
                 }
+            }
+            List<Map<String, Object>> records = collected;
+            if (mode == SinkMode.UPSERT) {
+                records = dedupe(records);
             }
             List<SinkWriteRequest> batches;
             try {
@@ -156,6 +160,29 @@ public class SinkDatabaseNodeType implements NodeType {
             ObjectNode body = message.body().deepCopy();
             body.putObject("sink").put("batches", batches.size()).put("records", records.size());
             ctx.emit("ok", message.withBody(body));
+        }
+
+        /** UPSERT: 같은 키 레코드는 마지막 것 하나만(TC-FLW-058). 키 열이 빠진 레코드는 그대로 두어 요청 검증에서 실패시킨다 */
+        private List<Map<String, Object>> dedupe(List<Map<String, Object>> records) {
+            Map<List<Object>, Map<String, Object>> byKey = new LinkedHashMap<>();
+            List<Map<String, Object>> keyless = new ArrayList<>();
+            for (Map<String, Object> r : records) {
+                List<Object> key = new ArrayList<>();
+                boolean complete = true;
+                for (String k : upsertKeys) {
+                    complete &= r.containsKey(k);
+                    key.add(r.get(k));
+                }
+                if (complete) {
+                    byKey.remove(key);
+                    byKey.put(key, r);
+                } else {
+                    keyless.add(r);
+                }
+            }
+            List<Map<String, Object>> out = new ArrayList<>(byKey.values());
+            out.addAll(keyless);
+            return out;
         }
 
         private void failed(FlowMessage message, NodeContext ctx, String reason) {

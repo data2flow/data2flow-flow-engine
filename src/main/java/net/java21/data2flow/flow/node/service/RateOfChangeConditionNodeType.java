@@ -24,7 +24,7 @@ import java.util.Locale;
  * {@code condition.rateOfChange}(변화율, RUL-01.04·TC-RUL-015): 측정 시각 기준 {@code window} 안에서 가장 이른 값과 지금 값의 차이가
  * {@code delta} 이상인지 본다(방향 up: 올라감, down: 내려감, any: 어느 쪽이든). 대상 키마다 창 안 표본을 상태에 둔다(최대 1,000개).
  * {@code emit}이 {@code change}(규칙 컴파일 기본)이면 판정이 바뀔 때만 true·false를 내고, {@code always}(기본)면 메시지마다 낸다. 내보내는
- * 메시지에 {@code rateOfChange:{from, to, delta, window}}를 더한다.
+ * 메시지에 {@code rateOfChange:{from, to, delta, window}}를 더한다. 창 안 표본이 하나뿐이면 판정을 미룬다.
  */
 public class RateOfChangeConditionNodeType implements NodeType {
 
@@ -95,6 +95,14 @@ public class RateOfChangeConditionNodeType implements NodeType {
             samples.removeIf(s -> s[0] < cutoff);
             while (samples.size() > MAX_SAMPLES) {
                 samples.removeFirst();
+            }
+            if (samples.size() < 2) {
+                // 창 안 표본이 하나면 판정을 미룬다(TC-FLW-040)
+                ObjectNode only = Jsons.object();
+                only.put("active", state != null && state.path("active").asBoolean(false));
+                only.putArray("samples").addObject().put("t", at.toEpochMilli()).put("v", v);
+                ctx.saveState(key, only);
+                return;
             }
             double first = samples.stream().min((a, b) -> Double.compare(a[0], b[0])).map(s -> s[1]).orElse(v);
             double change = v - first;

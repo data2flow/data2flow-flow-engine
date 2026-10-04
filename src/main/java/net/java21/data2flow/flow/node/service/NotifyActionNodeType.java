@@ -36,7 +36,8 @@ import java.util.Map;
  * {@code alarmId}가 없고 사건은 {@code flow.notify}다.
  *
  * <ul>
- *   <li>수신자: {@code policyId}(정책으로 action이 계산) 또는 {@code channels[]}(채널 기본 대화방) 또는 {@code recipients[{type, id, channel}]}.</li>
+ *   <li>수신자: {@code policyId}(정책으로 action이 계산) 또는 {@code channels[]}(채널 기본 대화방) 또는 {@code recipients[{type, id, channel}]}.
+ *       채널·수신자를 직접 지정하면 정책은 무시한다.</li>
  *   <li>템플릿 {@code templateKey}(기본 {@code flow.notify.default}), 변수: 메시지의 {@code deviceId·spaceId·measuredAt·payload}와
  *       {@code variables{이름: 메시지 경로}}.</li>
  *   <li>묶기 {@code aggregateWindow}(0 또는 1~10분) — 같은 플로우·노드·대상 키의 알림을 묶는다.</li>
@@ -83,6 +84,9 @@ public class NotifyActionNodeType implements NodeType {
                 }
                 i++;
             }
+        }
+        if (!recipients.isEmpty()) {
+            policyId = null;   // 채널·수신자를 직접 지정하면 정책은 무시(TC-FLW-055)
         }
         if (policyId == null && recipients.isEmpty()) {
             throw new NodeConfigException("config.policyId", "알림 정책(policyId) 또는 채널(channels)이 필요합니다");

@@ -24,7 +24,7 @@ import java.util.Set;
 
 /**
  * {@code condition.timeWindow}(시간 조건, RUL-01.07·TC-RUL-020): 메시지의 측정 시각을 조직 시간대(기본 Asia/Seoul)로 바꿔 요일·시각 범위
- * 안이면 {@code true}, 밖이면 {@code false}. {@code from > to}면 자정을 넘는 범위(22:00~06:00). {@code invert}면 반대(운영 시간 외).
+ * 안이면 {@code true}, 밖이면 {@code false}(시작 포함·끝 배타). {@code from ≥ to}면 자정을 넘는 범위(22:00~06:00). {@code invert}면 반대(운영 시간 외).
  * 공간 운영 시간표({@code spaceSchedule}, DEV-01.02)는 아직 쓰지 않는다(core 내부 API 없음).
  */
 public class TimeWindowConditionNodeType implements NodeType {
@@ -92,14 +92,16 @@ public class TimeWindowConditionNodeType implements NodeType {
             return List.of("true", "false");
         }
 
+        /** 시작 포함·끝 배타(09:00~18:00이면 18:00은 밖). 자정을 넘는 범위의 이른 부분은 전날 요일로 본다 */
         boolean inside(ZonedDateTime t) {
             LocalTime time = t.toLocalTime();
-            boolean inRange = from.isBefore(to) || from.equals(to)
-                    ? !time.isBefore(from) && !time.isAfter(to)
-                    : !time.isBefore(from) || !time.isAfter(to);
-            DayOfWeek day = from.isAfter(to) && !time.isBefore(LocalTime.MIDNIGHT) && time.isBefore(from) && inRange
-                    ? t.getDayOfWeek().minus(1) : t.getDayOfWeek();
-            return inRange && days.contains(day);
+            if (!from.isBefore(to)) {
+                if (!time.isBefore(from)) {
+                    return days.contains(t.getDayOfWeek());
+                }
+                return time.isBefore(to) && days.contains(t.getDayOfWeek().minus(1));
+            }
+            return !time.isBefore(from) && time.isBefore(to) && days.contains(t.getDayOfWeek());
         }
 
         @Override
