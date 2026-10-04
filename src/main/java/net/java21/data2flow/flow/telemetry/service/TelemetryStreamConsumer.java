@@ -10,6 +10,7 @@ import net.java21.data2flow.contracts.message.MessageCodec;
 import net.java21.data2flow.contracts.message.MessageFormatException;
 import net.java21.data2flow.contracts.messaging.ConsumerGroups;
 import net.java21.data2flow.contracts.messaging.MessagingNames;
+import net.java21.data2flow.contracts.messaging.SuperStreamSpec;
 import net.java21.data2flow.flow.common.Backoff;
 import net.java21.data2flow.flow.common.FlowEngineProperties;
 import net.java21.data2flow.flow.messaging.StreamConnection;
@@ -83,6 +84,11 @@ public class TelemetryStreamConsumer implements SmartLifecycle {
         Backoff backoff = new Backoff(Duration.ofSeconds(1), Duration.ofSeconds(30));
         while (running && consumer == null) {
             try {
+                // 생산자(pipeline)가 아직 만들지 않은 Super Stream을 구독하면 클라이언트는 파티션 0개로 "성공"하고 다시 찾지 않는다.
+                // 그러면 이 인스턴스는 영영 텔레메트리를 받지 못하므로, 첫 파티션이 생길 때까지 기다렸다가 연다
+                if (!connection.environment().streamExists(SuperStreamSpec.TELEMETRY.partition(0))) {
+                    throw new IllegalStateException(MessagingNames.STREAM_TELEMETRY + " Super Stream이 아직 없습니다(pipeline이 만듦)");
+                }
                 consumer = connection.environment().consumerBuilder()
                         .superStream(MessagingNames.STREAM_TELEMETRY)
                         .name(groupName())
