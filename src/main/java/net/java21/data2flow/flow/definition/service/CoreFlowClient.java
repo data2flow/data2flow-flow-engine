@@ -1,5 +1,6 @@
 package net.java21.data2flow.flow.definition.service;
 
+import net.java21.data2flow.contracts.http.InternalHttpClients;
 import net.java21.data2flow.contracts.flow.FlowDefinition;
 import net.java21.data2flow.contracts.message.CanonicalTelemetry;
 import net.java21.data2flow.flow.common.FlowEngineProperties;
@@ -45,7 +46,7 @@ public class CoreFlowClient implements CoreFlowDirectory {
         this.settings = settings;
         this.baseUrl = settings.baseUrl().endsWith("/") ? settings.baseUrl().substring(0, settings.baseUrl().length() - 1)
                 : settings.baseUrl();
-        this.http = HttpClient.newBuilder().connectTimeout(settings.connectTimeout()).build();
+        this.http = InternalHttpClients.create(settings.connectTimeout());
     }
 
     @Override
