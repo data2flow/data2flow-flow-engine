@@ -24,6 +24,7 @@ import net.java21.data2flow.flow.plan.service.FlowRegistry;
 import net.java21.data2flow.flow.support.FlowFixtures;
 import net.java21.data2flow.flow.support.IntegrationTestSupport;
 import net.java21.data2flow.flow.support.TestInfrastructure;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -62,6 +63,11 @@ class AutomationIT extends IntegrationTestSupport {
     AutomationGuard guard;
     @LocalServerPort
     int port;
+
+    @AfterEach
+    void clearCoreStops() {
+        TestInfrastructure.CORE.clearEmergencyStops();
+    }
 
     private void deploy(UUID flow, int version, FlowDefinition definition) {
         TestInfrastructure.CORE.put(flow, FlowFixtures.ORG, version, "ACTIVE", definition);
@@ -134,6 +140,8 @@ class AutomationIT extends IntegrationTestSupport {
                   {"id":"n-snk00001","type":"sink.database","config":{"connectionId":"4","target":"room_temp","mapping":[{"field":"$.deviceId","column":"device_id"},{"field":"temperature","column":"temperature"}]}}],
                  "wires":[{"from":"n-trg00001","to":"n-act00001"},{"from":"n-trg00001","to":"n-snk00001"}]}"""));
         EmergencyStopChanged stop = new EmergencyStopChanged(77, EmergencyStopChanged.Scope.organization(), "점검", 5L, Instant.now(WALL));
+        // core도 같은 상태를 준다: 주기 다시 읽기(guard.refresh, 동기화 주기마다)가 이벤트로 넣은 정지를 빈 목록으로 지우지 않게
+        TestInfrastructure.CORE.emergencyStop(77, FlowFixtures.ORG, null);
         publishEvent(DomainEvent.of(EventType.CONTROL_EMERGENCY_STARTED, FlowFixtures.ORG, stop, null, WALL));
         await().atMost(Duration.ofSeconds(10)).until(() -> guard.activeStops() == 1);
 
@@ -147,6 +155,7 @@ class AutomationIT extends IntegrationTestSupport {
         assertThat(sink.records()).singleElement().satisfies(r -> assertThat(((Number) r.get("device_id")).longValue()).isEqualTo(7201));
         assertThat(STREAMS.commands(flow)).as("비상 정지 중 제어 0건").isEmpty();
 
+        TestInfrastructure.CORE.clearEmergencyStops();
         publishEvent(DomainEvent.of(EventType.CONTROL_EMERGENCY_RELEASED, FlowFixtures.ORG, stop, null, WALL));
         await().atMost(Duration.ofSeconds(10)).until(() -> guard.activeStops() == 0);
         STREAMS.publish(reading(7201, "temperature", 31));
