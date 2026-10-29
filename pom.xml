@@ -24,6 +24,11 @@
              tomcat 11.0.24 → CVE-2026-65182·65905·68525(CRITICAL), jackson 3.1.5 → CVE-2026-89407·89425·68497·91776·91777(HIGH) -->
         <tomcat.version>11.0.26</tomcat.version>
         <jackson-bom.version>3.1.7</jackson-bom.version>
+        <!-- 2026-10-29 Trivy: amqp-client 5.30.0 → CVE-2026-63337·69219·69220·75516(HIGH). stream-client 1.6.0이 끌어오는
+             lz4-java 1.11.0 → CVE-2026-106451, snappy-java 1.1.10.8 → CVE-2026-108106·93451(HIGH) -->
+        <rabbit-amqp-client.version>5.34.0</rabbit-amqp-client.version>
+        <lz4-java.version>1.11.4</lz4-java.version>
+        <snappy-java.version>1.1.10.9</snappy-java.version>
         <data2flow-contracts.version>0.1.0-SNAPSHOT</data2flow-contracts.version>
     </properties>
 
@@ -44,6 +49,16 @@
                 <version>${data2flow-contracts.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>at.yawk.lz4</groupId>
+                <artifactId>lz4-java</artifactId>
+                <version>${lz4-java.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.xerial.snappy</groupId>
+                <artifactId>snappy-java</artifactId>
+                <version>${snappy-java.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
